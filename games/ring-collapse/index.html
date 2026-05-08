@@ -1,0 +1,220 @@
+<!--
+Gameplay Weaknesses Fixed:
+1. Input feel - marker speed was tied to frame delta causing erratic movement; now uses a consistent rad/ms speed for smooth motion.
+2. Feedback - added visual flash (green for success, red for fail) to give immediate on-screen confirmation of actions.
+3. Dead time - increased pause after a successful click and display a brief success flash so player knows they succeeded.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ring Collapse</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0a0f;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    .game-header {
+      padding: 0.5rem 1rem;
+      background: #111;
+    }
+    .game-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+    }
+    .game-description {
+      margin: 0.3rem 0;
+      font-size: 0.9rem;
+      color: #bbb;
+    }
+    .game-controls {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      gap: 1rem;
+      font-size: 0.85rem;
+    }
+    canvas {
+      display: block;
+      background: #0a0a0f;
+    }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Ring Collapse</h1>
+    <p class="game-description">Concentric rings continuously shrink; tap the rotating outer marker to pause its spin and line up with gaps in the inner ring before the next collapse.</p>
+    <ul class="game-controls">
+      <li>Click to pause when marker aligns with inner gap</li>
+      <li>Press R to restart after game over</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="400" height="400"></canvas>
+  </main>
+  <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const CENTER = {x: W/2, y: H/2};
+
+      // Game parameters
+      const MIN_RADIUS = 40;
+      const START_RADIUS = 180;
+      const GAP_ANGLE = Math.PI/6; // 30° gap
+      const MARKER_SPEED = 0.001; // rad per millisecond (smooth consistent speed)
+      const PAUSE_TIME = 800; // ms pause on success (extended for feedback)
+
+      let radius = START_RADIUS;
+      let markerAngle = 0;
+      let shrinkSpeed = 0.15; // pixels per frame
+      let paused = false;
+      let pauseEnd = 0;
+      let score = 0;
+  let flashEnd = 0; // timestamp when flash ends
+  let flashColor = '';
+      let gameOver = false;
+      let lastTime = 0;
+      let audioCtx = null;
+
+      function beep(frequency, duration){
+        try {
+          if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.frequency.value = frequency;
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration/1000);
+          osc.stop(audioCtx.currentTime + duration/1000);
+        } catch(e){
+          // silence any audio errors
+        }
+      }
+
+      function reset(){
+        radius = START_RADIUS;
+        markerAngle = 0;
+        shrinkSpeed = 0.15;
+        paused = false;
+        pauseEnd = 0;
+        score = 0;
+        gameOver = false;
+        lastTime = performance.now();
+        requestAnimationFrame(loop);
+      }
+
+function draw(){
+          ctx.clearRect(0,0,W,H);
+          // flash feedback overlay if active
+          const now = performance.now();
+          if(now < flashEnd){
+            ctx.fillStyle = flashColor;
+            ctx.globalAlpha = 0.3;
+            ctx.fillRect(0,0,W,H);
+            ctx.globalAlpha = 1.0;
+          }
+          // draw inner ring with gap
+          ctx.strokeStyle = '#7df9ff';
+          ctx.lineWidth = 12;
+          ctx.beginPath();
+          ctx.arc(CENTER.x, CENTER.y, radius*0.6, GAP_ANGLE/2, Math.PI*2 - GAP_ANGLE/2);
+          ctx.stroke();
+          // draw outer rotating marker
+          const markerRadius = radius;
+          const mx = CENTER.x + Math.cos(markerAngle)*markerRadius;
+          const my = CENTER.y + Math.sin(markerAngle)*markerRadius;
+          ctx.strokeStyle = '#ff00aa';
+          ctx.lineWidth = 8;
+          ctx.beginPath();
+          ctx.moveTo(CENTER.x, CENTER.y);
+          ctx.lineTo(mx, my);
+          ctx.stroke();
+          // score UI
+          ctx.fillStyle = '#ffd23f';
+          ctx.font = '16px sans-serif';
+          ctx.fillText('Score: '+score, 10, 20);
+          // game over overlay
+          if(gameOver){
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0,0,W,H);
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.font = '24px sans-serif';
+            ctx.fillText('Game Over', W/2, H/2 - 10);
+            ctx.font = '16px sans-serif';
+            ctx.fillText('Press R to restart', W/2, H/2 + 20);
+          }
+        }
+
+      function loop(timestamp){
+        try {
+          if(gameOver) return; // stop loop on game over
+          const delta = timestamp - lastTime;
+          lastTime = timestamp;
+          if(paused){
+            if(timestamp >= pauseEnd){
+              paused = false;
+            }
+          } else {
+            // update marker
+            markerAngle += MARKER_SPEED * delta;
+            // shrink ring
+            radius -= shrinkSpeed * delta / 16; // normalize to ~60fps
+            if(radius < MIN_RADIUS){
+              // player survived until collapse -> win condition (optional)
+              gameOver = true;
+            }
+          }
+          draw();
+          if(!gameOver) requestAnimationFrame(loop);
+        } catch(e){
+          console.error('Animation error', e);
+        }
+      }
+
+      canvas.addEventListener('click',()=>{
+        if(gameOver) return;
+        // check alignment
+        const diff = Math.abs(((markerAngle % (2*Math.PI)) - 0 + 2*Math.PI) % (2*Math.PI));
+        const halfGap = GAP_ANGLE/2;
+if(diff < halfGap || diff > 2*Math.PI - halfGap){
+            // success
+            beep(600, 100);
+            score++;
+            paused = true;
+            pauseEnd = performance.now() + PAUSE_TIME;
+            shrinkSpeed *= 1.05; // slightly harder
+            // flash green success
+            flashColor = 'lime';
+            flashEnd = performance.now() + 200;
+          } else {
+            // fail
+            beep(200, 300);
+            gameOver = true;
+            // flash red failure
+            flashColor = 'red';
+            flashEnd = performance.now() + 400;
+            draw();
+          }
+      });
+
+      window.addEventListener('keydown', (e)=>{
+        if(e.key === 'r' || e.key === 'R'){
+          reset();
+        }
+      });
+
+      // start game
+      reset();
+    })();
+  </script>
+</body>
+</html>
