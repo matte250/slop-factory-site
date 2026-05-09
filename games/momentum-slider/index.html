@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Momentum Slider</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; }
+    .game-header { padding:1rem; text-align:center; }
+    .game-header h1 { margin:0.2rem; font-size:2rem; }
+    .game-description { margin:0.2rem; font-size:1rem; }
+    .game-controls { list-style:none; padding:0; margin:0.5rem 0; display:inline-block; text-align:left; }
+    .game-controls li { margin:0.2rem 0; }
+    canvas { display:block; margin:0 auto; background:#111; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Momentum Slider</h1>
+    <p class="game-description">Tap to reverse the ball's horizontal velocity while it slides along a narrow corridor; time the reversals to weave through moving vertical barriers that appear in sync with the ball's speed.</p>
+    <ul class="game-controls">
+      <li>Tap / click to reverse direction</li>
+      <li>R to restart the game</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+    // ---- Game Constants ----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const BALL_RADIUS = 8;
+    const BALL_COLOR = '#7df9ff'; // neon cyan
+    const GAP_WIDTH = 120; // width of gap in barriers
+    const BAR_HEIGHT = canvas.height; // full height, we'll cut a gap
+    const BAR_INITIAL_SPEED = 1.5; // pixels per frame
+    const BAR_SPAWN_INTERVAL = 2000; // ms
+    const SCORE_KEY = 'slop-factory:momentum-slider:highscore';
+
+    // ---- Game State ----
+    let ball = { x: canvas.width / 2, y: canvas.height / 2, vx: 2 };
+    let bars = [];
+    let lastSpawn = 0;
+    let barSpeed = BAR_INITIAL_SPEED;
+    let score = 0;
+    let highScore = parseInt(localStorage.getItem(SCORE_KEY)) || 0;
+    let gameOver = false;
+    let restartRequested = false;
+    let startTime = performance.now();
+
+    // ---- Input ----
+    function reverse() {
+      if (gameOver) return;
+      ball.vx = -ball.vx;
+    }
+    canvas.addEventListener('click', reverse);
+    canvas.addEventListener('touchstart', e => { e.preventDefault(); reverse(); });
+    window.addEventListener('keydown', e => {
+      if (e.key === 'r' || e.key === 'R') { restartRequested = true; }
+      else if (!gameOver) { reverse(); }
+    });
+
+    // ---- Helper ----
+    function spawnBar() {
+      const gapX = Math.random() * (canvas.width - GAP_WIDTH);
+      bars.push({ y: 0, gapX, passed: false });
+    }
+
+    function resetGame() {
+      ball = { x: canvas.width / 2, y: canvas.height / 2, vx: 2 };
+      bars = [];
+      lastSpawn = 0;
+      barSpeed = BAR_INITIAL_SPEED;
+      score = 0;
+      gameOver = false;
+      startTime = performance.now();
+    }
+
+    // ---- Main Loop ----
+    function loop(timestamp) {
+      try {
+        const dt = timestamp - startTime;
+        // spawn bars
+        if (timestamp - lastSpawn > BAR_SPAWN_INTERVAL) {
+          spawnBar();
+          lastSpawn = timestamp;
+        }
+
+        // update ball
+        ball.x += ball.vx;
+        if (ball.x < BALL_RADIUS) { ball.x = BALL_RADIUS; ball.vx = Math.abs(ball.vx); }
+        if (ball.x > canvas.width - BALL_RADIUS) { ball.x = canvas.width - BALL_RADIUS; ball.vx = -Math.abs(ball.vx); }
+
+        // update bars
+        for (let i = bars.length - 1; i >= 0; i--) {
+          const bar = bars[i];
+          bar.y += barSpeed;
+          // check collision when bar reaches ball's y
+          if (!bar.passed && bar.y + BAR_HEIGHT >= ball.y) {
+            bar.passed = true;
+            // if ball not within gap, game over
+            if (ball.x < bar.gapX || ball.x > bar.gapX + GAP_WIDTH) {
+              gameOver = true;
+            } else {
+              score++;
+              if (score > highScore) { highScore = score; localStorage.setItem(SCORE_KEY, highScore); }
+              // gradually increase difficulty
+              barSpeed *= 1.03;
+            }
+          }
+          // remove off-screen bars
+          if (bar.y > canvas.height) {
+            bars.splice(i, 1);
+          }
+        }
+
+        // draw
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // draw bars (full column with gap)
+        ctx.fillStyle = '#7df9ff';
+        for (const bar of bars) {
+          // left part
+          ctx.fillRect(0, bar.y, bar.gapX, BAR_HEIGHT);
+          // right part
+          ctx.fillRect(bar.gapX + GAP_WIDTH, bar.y, canvas.width - (bar.gapX + GAP_WIDTH), BAR_HEIGHT);
+        }
+
+        // draw ball
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = BALL_COLOR;
+        ctx.fill();
+
+        // draw UI
+        ctx.fillStyle = '#ffd23f'; // neon yellow
+        ctx.font = '16px monospace';
+        ctx.fillText('Score: ' + score, 10, 20);
+        ctx.fillText('High: ' + highScore, 10, 40);
+        if (gameOver) {
+          ctx.fillStyle = '#ff00aa'; // neon magenta
+          ctx.textAlign = 'center';
+          ctx.font = '48px monospace';
+          ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+          ctx.font = '24px monospace';
+          ctx.fillText('Press R to restart', canvas.width / 2, canvas.height / 2 + 30);
+        }
+
+        if (restartRequested) {
+          resetGame();
+          restartRequested = false;
+        }
+
+        requestAnimationFrame(loop);
+      } catch (e) {
+        console.error('Animation loop error:', e);
+        // keep looping to avoid freeze
+        requestAnimationFrame(loop);
+      }
+    }
+
+    // Start the game loop immediately
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
