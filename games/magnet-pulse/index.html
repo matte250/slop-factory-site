@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Magnet Pulse</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0a0f;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    .game-header {
+      padding: 1rem;
+      text-align: center;
+    }
+    .game-header h1 {
+      margin: 0.2rem;
+      font-size: 2rem;
+    }
+    .game-header p {
+      margin: 0.2rem;
+      font-size: 1rem;
+      color: #7df9ff;
+    }
+    .game-controls {
+      list-style: none;
+      padding: 0;
+      margin: 0.5rem 0 0;
+      display: inline-block;
+      text-align: left;
+    }
+    .game-controls li {
+      font-size: 0.9rem;
+      color: #ffd23f;
+    }
+    canvas { display: block; margin: 0 auto; background:#111; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Magnet Pulse</h1>
+    <p class="game-description">Tap to flip the ball’s magnetic polarity, causing it to be attracted to blue plates and repelled by orange plates. Ride the moving plates, avoid spikes, and survive as long as you can.</p>
+    <ul class="game-controls">
+      <li>Click or press Space to toggle polarity</li>
+      <li>Press R to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const BALL_RADIUS = 12;
+      const PLATE_W = 80, PLATE_H = 15;
+      const SPIKE_W = 30, SPIKE_H = 20;
+
+      let ball = {x: W/2, y: H/2, vx: 0, vy: 0, polarity: 1}; // 1 => attracted to blue, -1 => attracted to orange
+      let plates = [];
+      let spikes = [];
+      let score = 0, hiScore = 0;
+      let gameOver = false;
+      let lastTime = 0;
+      let audioCtx = null;
+
+      function init(){
+        ball = {x: W/2, y: H/2, vx: 0, vy: 0, polarity: 1};
+        plates = [];
+        spikes = [];
+        score = 0; gameOver = false; lastTime = performance.now();
+        // create initial plates
+        for(let i=0;i<6;i++){
+          const col = Math.random()<0.5 ? 'blue' : 'orange';
+          plates.push({x: Math.random()*W, y: 100 + i*80, w: PLATE_W, h: PLATE_H, color: col, dir: Math.random()<0.5?1:-1, speed: 80 + Math.random()*40});
+        }
+        // create spikes (static hazards)
+        for(let i=0;i<5;i++){
+          spikes.push({x: Math.random()* (W- SPIKE_W), y: Math.random()* (H- SPIKE_H), w: SPIKE_W, h: SPIKE_H});
+        }
+        // load high score from storage
+        try{hiScore = parseInt(localStorage.getItem('slop-factory:magnet-pulse:hiScore'))||0;}catch(e){}
+        requestAnimationFrame(loop);
+      }
+
+      function togglePolarity(){
+        ball.polarity *= -1;
+        // audio feedback
+        try{
+          if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.frequency.value = ball.polarity===1?440:220;
+          osc.connect(gain).connect(audioCtx.destination);
+          gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          osc.start();
+          osc.stop(audioCtx.currentTime+0.1);
+        }catch(e){}
+      }
+
+      function restart(){
+        init();
+      }
+
+      canvas.addEventListener('click',()=>{ if(!gameOver) togglePolarity(); else restart(); });
+      window.addEventListener('keydown', e=>{
+        if(e.code==='Space'){
+          e.preventDefault();
+          if(!gameOver) togglePolarity(); else restart();
+        } else if(e.key==='r' || e.key==='R'){
+          restart();
+        }
+      });
+
+      function loop(timestamp){
+        const dt = (timestamp - lastTime)/1000; // seconds
+        lastTime = timestamp;
+        try{
+          if(!gameOver){
+            update(dt);
+            render();
+            score += dt;
+          } else {
+            renderGameOver();
+          }
+        }catch(err){
+          console.error('loop error', err);
+        }
+        requestAnimationFrame(loop);
+      }
+
+      function update(dt){
+        // move plates
+        plates.forEach(p=>{
+          p.x += p.dir * p.speed * dt;
+          if(p.x < -p.w) p.x = W;
+          if(p.x > W) p.x = -p.w;
+        });
+        // simple magnetic force towards nearest plate of matching polarity
+        let nearest=null, nearestDist=Infinity;
+        plates.forEach(p=>{
+          const dx = (p.x + p.w/2) - ball.x;
+          const dy = (p.y + p.h/2) - ball.y;
+          const dist = Math.hypot(dx,dy);
+          const matches = (ball.polarity===1 && p.color==='blue') || (ball.polarity===-1 && p.color==='orange');
+          const effectiveDist = matches ? dist : dist*2; // repel stronger
+          if(effectiveDist < nearestDist){ nearestDist=effectiveDist; nearest={dx,dy,dist,matches}; }
+        });
+        if(nearest){
+          const force = 200 / (nearest.dist+10);
+          const ax = (nearest.dx/nearest.dist) * force * (nearest.matches?1:-1);
+          const ay = (nearest.dy/nearest.dist) * force * (nearest.matches?1:-1);
+          ball.vx += ax*dt;
+          ball.vy += ay*dt;
+        }
+        // apply some damping
+        ball.vx *= 0.99;
+        ball.vy *= 0.99;
+        // move ball
+        ball.x += ball.vx*dt*60; // scale for visible speed
+        ball.y += ball.vy*dt*60;
+        // keep inside bounds
+        if(ball.x < BALL_RADIUS){ ball.x = BALL_RADIUS; ball.vx*=-0.5; }
+        if(ball.x > W-BALL_RADIUS){ ball.x = W-BALL_RADIUS; ball.vx*=-0.5; }
+        if(ball.y < BALL_RADIUS){ ball.y = BALL_RADIUS; ball.vy*=-0.5; }
+        if(ball.y > H-BALL_RADIUS){ ball.y = H-BALL_RADIUS; ball.vy*=-0.5; }
+        // check spikes collision
+        spikes.forEach(s=>{
+          if(ball.x+BALL_RADIUS > s.x && ball.x-BALL_RADIUS < s.x+s.w &&
+             ball.y+BALL_RADIUS > s.y && ball.y-BALL_RADIUS < s.y+s.h){
+            gameOver = true;
+            // store high score
+            try{ if(score>hiScore){ hiScore=Math.floor(score); localStorage.setItem('slop-factory:magnet-pulse:hiScore', hiScore); } }catch(e){}
+          }
+        });
+        // progressive difficulty: increase plate speed over time
+        plates.forEach(p=>{ p.speed += dt*2; });
+      }
+
+      function render(){
+        ctx.clearRect(0,0,W,H);
+        // draw plates
+        plates.forEach(p=>{
+          ctx.fillStyle = p.color==='blue' ? '#7df9ff' : '#ff00aa';
+          ctx.fillRect(p.x, p.y, p.w, p.h);
+        });
+        // draw spikes
+        ctx.fillStyle = '#ffd23f';
+        spikes.forEach(s=>{
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y+s.h);
+          ctx.lineTo(s.x+s.w/2, s.y);
+          ctx.lineTo(s.x+s.w, s.y+s.h);
+          ctx.closePath();
+          ctx.fill();
+        });
+        // draw ball
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2);
+        ctx.fillStyle = ball.polarity===1 ? '#7df9ff' : '#ff00aa';
+        ctx.fill();
+        // draw score
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px monospace';
+        ctx.fillText('Score: '+Math.floor(score), 10, 20);
+        ctx.fillText('Hi: '+hiScore, 10, 40);
+      }
+
+      function renderGameOver(){
+        render();
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0,W,H);
+        ctx.fillStyle = '#ff00aa';
+        ctx.font = '48px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game Over', W/2, H/2-20);
+        ctx.fillStyle = '#7df9ff';
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: '+Math.floor(score), W/2, H/2+20);
+        ctx.fillText('Press R or click to Restart', W/2, H/2+60);
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>
