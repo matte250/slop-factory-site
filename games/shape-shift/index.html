@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shape Shift</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:0.5rem 1rem;background:#0a0a0f;color:#7df9ff;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:0.2rem 0;font-size:0.9rem;}
+    .game-header ul {margin:0;padding:0;list-style:none;font-size:0.8rem;}
+    .game-header li {display:inline;margin-right:1rem;}
+    canvas {display:block; background:#0a0a0f;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Shape Shift</h1>
+    <p class="game-description">Tap to toggle the player between a square and a circle, each passing through differently shaped gaps; survive as obstacles scroll by by matching your form to the opening.</p>
+    <ul class="game-controls">
+      <li>Tap to toggle shape</li>
+      <li>R to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+
+      // Game state
+      let player = {x:100, y:H/2, size:40, shape:'square'}; // shape: 'square' or 'circle'
+      let obstacles = [];
+      let lastObstacleTime = 0;
+      const obstacleInterval = 1500; // ms
+      let speed = 2; // pixels per frame
+      let score = 0;
+      let running = true;
+      let audioCtx = null;
+
+      function init(){
+        player.shape='square';
+        player.y=H/2;
+        obstacles=[]; lastObstacleTime=0; speed=2; score=0; running=true;
+        requestAnimationFrame(loop);
+      }
+
+      function toggleShape(){
+        player.shape = player.shape==='square' ? 'circle' : 'square';
+        // optional audio feedback
+        try {
+          if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.frequency.value = 440;
+          osc.type = 'square';
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          osc.start();
+          osc.stop(audioCtx.currentTime+0.07);
+        } catch(e) { console.error('audio error', e); }
+      }
+
+      function spawnObstacle(){
+        // Randomly choose gap shape and vertical position
+        const gapShape = Math.random()<0.5 ? 'square' : 'circle';
+        const gapY = Math.random() * (H - 200) + 100; // keep away from edges
+        obstacles.push({x:W, gapY, gapShape});
+      }
+
+function resetGame(){
+         overlayText = null;
+         init();
+       }
+
+      // Input handlers
+      canvas.addEventListener('pointerdown', toggleShape);
+      window.addEventListener('keydown', e=>{ if(e.key==='r' || e.key==='R') resetGame(); });
+
+      function drawPlayer(){
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.fillStyle = '#7df9ff';
+        if(player.shape==='square'){
+          ctx.fillRect(-player.size/2, -player.size/2, player.size, player.size);
+        } else {
+          ctx.beginPath();
+          ctx.arc(0,0,player.size/2,0,Math.PI*2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      function drawObstacle(obs){
+        ctx.fillStyle = '#ff00aa';
+        // draw a full vertical bar
+        ctx.fillRect(obs.x-20,0,40,H);
+        // cut out the gap
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = '#000';
+        if(obs.gapShape==='square'){
+          ctx.fillRect(obs.x-20, obs.gapY-40, 40, 80);
+        } else {
+          ctx.beginPath();
+          ctx.arc(obs.x, obs.gapY, 40, 0, Math.PI*2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+function loop(timestamp){
+      // if game over, show overlay
+      if(!running){
+        drawOverlay();
+        requestAnimationFrame(loop);
+        return;
+      }
+      // apply screen shake before drawing
+      ctx.save();
+      applyShake();
+      // clear canvas
+      ctx.clearRect(0,0,W,H);
+      // draw background stars
+      drawStars();
+      // spawn obstacles
+      if(timestamp - lastObstacleTime > obstacleInterval){
+        spawnObstacle();
+        lastObstacleTime = timestamp;
+      }
+      // update obstacles
+      for(let i=obstacles.length-1;i>=0;i--){
+        const o = obstacles[i];
+        o.x -= speed;
+        drawObstacle(o);
+        // check collision when obstacle passes player.x
+        if(o.x < player.x && !o.passed){
+          o.passed = true;
+          if(o.gapShape !== player.shape){
+            // game over
+            running = false;
+            // feedback: audio, shake, particles, overlay
+            try {
+              if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              osc.frequency.value = 150;
+              osc.type = 'sawtooth';
+              osc.connect(gain);
+              gain.connect(audioCtx.destination);
+              gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+              osc.start();
+              osc.stop(audioCtx.currentTime+0.2);
+            } catch(e){ console.error(e); }
+            shakeTime = 12;
+            spawnParticles(player.x, player.y, '#ff2222');
+            overlayText = {title: 'Game Over', sub: 'Score: '+score+' Press R to restart'};
+          } else {
+            score++;
+            // visual/audio feedback for scoring
+            spawnParticles(player.x, player.y, '#7df9ff');
+            try {
+              if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              osc.frequency.value = 660;
+              osc.type = 'triangle';
+              osc.connect(gain);
+              gain.connect(audioCtx.destination);
+              gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+              osc.start();
+              osc.stop(audioCtx.currentTime+0.05);
+            } catch(e){ console.error(e); }
+            if(score%5===0) speed+=0.3;
+          }
+        }
+        // remove off-screen obstacles
+        if(o.x < -40) obstacles.splice(i,1);
+      }
+      // draw player
+      drawPlayer();
+      // draw persistent score UI
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('Score: '+score, 10, 30);
+      // draw particles
+      updateAndDrawParticles();
+      ctx.restore();
+      requestAnimationFrame(loop);
+    }
+
+// start immediately
+  init();
+
+  // --- Added visual and background enhancements ---
+  // background stars
+  const stars = [];
+  for(let i=0;i<100;i++){
+    stars.push({x: Math.random()*W, y: Math.random()*H, radius: Math.random()*1.5+0.5, speed: 0.2+Math.random()*0.3});
+  }
+  function drawStars(){
+    ctx.fillStyle = '#555';
+    stars.forEach(s=>{
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.radius,0,Math.PI*2);
+      ctx.fill();
+      s.y += s.speed;
+      if(s.y>H){ s.y=0; s.x=Math.random()*W; }
+    });
+  }
+
+  // particles for score/hit feedback
+  const particles = [];
+  function spawnParticles(x,y,color){
+    for(let i=0;i<15;i++){
+      const angle = Math.random()*2*Math.PI;
+      const speed = Math.random()*2+1;
+      particles.push({x, y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, life:30, color});
+    }
+  }
+  function updateAndDrawParticles(){
+    for(let i=particles.length-1;i>=0;i--){
+      const p=particles[i];
+      p.x+=p.vx; p.y+=p.vy; p.life--;
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(p.life/30,0);
+      ctx.fillRect(p.x, p.y, 2,2);
+      if(p.life<=0){ particles.splice(i,1); }
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // screen shake variables
+  let shakeTime=0;
+  function applyShake(){
+    if(shakeTime>0){
+      const magnitude=5;
+      const dx = (Math.random()*2-1)*magnitude;
+      const dy = (Math.random()*2-1)*magnitude;
+      ctx.translate(dx,dy);
+      shakeTime--;
+    }
+  }
+
+  // overlay for win/lose
+  let overlayText = null; // {title, sub}
+  function drawOverlay(){
+    if(!overlayText) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#ffd23f';
+    ctx.textAlign='center';
+    ctx.font='48px sans-serif';
+    ctx.fillText(overlayText.title, W/2, H/2-20);
+    ctx.font='24px sans-serif';
+    ctx.fillText(overlayText.sub, W/2, H/2+30);
+    ctx.restore();
+  }
+
+
+
+
+
+    })();
+  </script>
+</body>
+</html>
