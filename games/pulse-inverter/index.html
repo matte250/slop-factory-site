@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Inverter</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0a0f;
+      color: #fff;
+      font-family: Arial, Helvetica, sans-serif;
+      overflow: hidden;
+    }
+    .game-header {
+      padding: 0.5rem 1rem;
+    }
+    .game-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+    }
+    .game-header p {
+      margin: 0.2rem 0 0.5rem;
+      font-size: 0.9rem;
+    }
+    .game-controls {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .game-controls li {
+      font-size: 0.85rem;
+    }
+    #restart {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      padding: 0.4rem 0.8rem;
+      background: #7df9ff;
+      border: none;
+      color: #000;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Inverter</h1>
+    <p class="game-description">Tap to invert the pulse phase of the corridor walls, letting a moving dot slip through the expanding and contracting gaps. Survive as long as possible while the walls rhythmically change shape.</p>
+    <ul class="game-controls">
+      <li>Tap / Click to invert pulse phase</li>
+      <li>Press R or click Restart to reset the game</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ---- Game constants ---------------------------------------------------
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const PLAYER_RADIUS = 8;
+    const GAP_BASE = 120; // base gap size in pixels
+    const GAP_AMPLITUDE = 60; // how much the gap expands/contracts
+    const PULSE_FREQ = 1.5; // Hz
+    const SAFE_TIME = 3; // seconds with no dangerous walls
+    const SCORE_PER_SEC = 1;
+
+    // ---- Game state -------------------------------------------------------
+    let inverted = false; // pulse phase flag
+    let startTime = null;
+    let lastScoreTime = 0;
+    let loopId = null;
+    let gameOver = false;
+    let lastTimestamp = null; // for dt calculation
+
+    const player = { x: 100, y: HEIGHT / 2 };
+    const __game = {
+      state: 'menu', // "menu" | "playing" | "gameover"
+      score: 0,
+      player: { x: player.x, y: player.y, visible: true },
+      objective: 'Tap to invert the pulse phase and guide the dot through the moving corridor.'
+    };
+    window.__game = __game;
+
+    // ---- Input ------------------------------------------------------------
+    function togglePhase() {
+      inverted = !inverted;
+    }
+    document.addEventListener('pointerdown', togglePhase);
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyR') restart();
+      if (e.code === 'Space') togglePhase();
+    });
+    document.getElementById('restart').addEventListener('click', restart);
+
+    // ---- Core loop --------------------------------------------------------
+    function startLoop(timestamp) {
+      if (!startTime) startTime = timestamp / 1000; // seconds
+      const now = timestamp / 1000;
+      const dt = Math.min((now - (lastTimestamp !== null ? lastTimestamp : now)), 0.1);
+      lastTimestamp = now;
+
+      const elapsed = now - startTime;
+
+      update(dt, elapsed);
+      render(elapsed);
+      if (!gameOver) {
+        loopId = requestAnimationFrame(startLoop);
+      }
+    }
+
+    function update(dt, elapsed) {
+      // Update state
+      if (__game.state === 'menu') __game.state = 'playing';
+
+      // Score increments each second
+      if (elapsed - lastScoreTime >= 1) {
+        __game.score += SCORE_PER_SEC;
+        lastScoreTime = elapsed;
+      }
+
+      // Player is static horizontally, only Y position changes via input (phase inversion)
+      // The corridor walls are defined by a sinusoidal gap size.
+      const phase = inverted ? Math.PI : 0;
+      const gapSize = GAP_BASE + Math.sin(2 * Math.PI * PULSE_FREQ * elapsed + phase) * GAP_AMPLITUDE;
+
+      // Collision detection (after safe period)
+      if (elapsed > SAFE_TIME) {
+        const topWall = (HEIGHT - gapSize) / 2;
+        const bottomWall = topWall + gapSize;
+        if (player.y - PLAYER_RADIUS < topWall || player.y + PLAYER_RADIUS > bottomWall) {
+          // hit wall
+          __game.state = 'gameover';
+          gameOver = true;
+        }
+      }
+
+      // Update observable player position
+      __game.player.x = player.x;
+      __game.player.y = player.y;
+      __game.player.visible = true; // always visible in this simple implementation
+    }
+
+    function render(elapsed) {
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      // Draw corridor walls
+      const phase = inverted ? Math.PI : 0;
+      const gapSize = GAP_BASE + Math.sin(2 * Math.PI * PULSE_FREQ * elapsed + phase) * GAP_AMPLITUDE;
+      const topWall = (HEIGHT - gapSize) / 2;
+      const bottomWall = topWall + gapSize;
+
+      ctx.fillStyle = '#7df9ff';
+      ctx.fillRect(0, 0, WIDTH, topWall);
+      ctx.fillRect(0, bottomWall, WIDTH, HEIGHT - bottomWall);
+
+      // Draw player dot
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff00aa';
+      ctx.fill();
+
+      // Draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: ' + __game.score, 10, 30);
+
+      // Game over overlay
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', WIDTH / 2, HEIGHT / 2 - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Final Score: ' + __game.score, WIDTH / 2, HEIGHT / 2 + 20);
+        ctx.fillText('Press R or click Restart', WIDTH / 2, HEIGHT / 2 + 60);
+      }
+    }
+
+    // ---- Restart ----------------------------------------------------------
+    function restart() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // Reset state variables
+      startTime = null;
+      lastScoreTime = 0;
+      inverted = false;
+      gameOver = false;
+      lastTimestamp = null;
+      __game.state = 'menu';
+      __game.score = 0;
+      player.x = 100;
+      player.y = HEIGHT / 2;
+      // Start loop again
+      loopId = requestAnimationFrame(startLoop);
+    }
+
+    // Start the game on load
+    loopId = requestAnimationFrame(startLoop);
+  </script>
+</body>
+</html>
