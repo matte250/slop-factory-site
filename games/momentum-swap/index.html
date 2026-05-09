@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Momentum Swap</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:Arial,Helvetica,sans-serif;overflow:hidden;}
+    .game-header {padding:10px;background:#111;}
+    .game-header h1 {margin:0;font-size:1.5em;}
+    .game-description {margin:5px 0;font-size:0.9em;}
+    .game-controls {margin:0;padding:0;list-style:none;}
+    .game-controls li {font-size:0.85em;}
+    canvas {display:block;background:#000;}
+    .game-restart {position:absolute;top:10px;right:10px;padding:5px 10px;background:#222;color:#fff;border:none;cursor:pointer;}
+    .game-restart:hover {background:#333;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Momentum Swap</h1>
+    <p class="game-description">Tap to swap the dot's velocity with the nearest moving block, riding it through passages while the dot auto‑advances. Survive as long as possible.</p>
+    <ul class="game-controls">
+      <li>Tap / click to swap velocity with nearest block</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    /*=== CRITIQUE ANALYSIS
+    // Critique analysis goes here.
+    === END CRITIQUE ===*/
+    // ---------- Configuration ----------
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+    const PLAYER_RADIUS = 12;
+    const PLAYER_START = {x: CANVAS_W/2, y: CANVAS_H/2, vx: 120, vy: 0};
+    const BLOCK_SIZE = 30;
+    const BLOCK_HALF = BLOCK_SIZE/2;
+    const BLOCK_COLOR = '#7df9ff';
+    const BLOCK_OUTLINE = '#ff00aa';
+    const SAFE_RADIUS = 200;
+    const SPAWN_BASE = 1.2; // seconds
+    const SPAWN_JITTER = 0.3; // +- seconds
+    const SWAP_COOLDOWN = 0.2; // seconds
+    const SCORE_SWAP = 10;
+    const SCORE_SURVIVE = 5;
+    const SPEED_INCREASE_INTERVAL = 10; // seconds
+    const SPEED_INCREASE_FACTOR = 0.15;
+    const SPEED_CAP = 500;
+    const HIGH_SCORE_KEY = 'slop-factory:momentum-swap:highScore';
+
+    // ---------- State ----------
+    let canvas, ctx;
+    let lastTime = performance.now();
+    let loopId = null;
+    let player = {};
+    let blocks = [];
+    let spawnTimer = 0;
+    let swapCooldown = 0;
+    let score = 0;
+    let lives = 3;
+    let state = 'playing'; // "playing" | "gameover"
+    let speedMultiplier = 1;
+    let timeSinceStart = 0;
+    let highScore = parseInt(localStorage.getItem(HIGH_SCORE_KEY)) || 0;
+
+    // ---------- Observable contract ----------
+    window.__game = {
+      state: 'menu',
+      score: 0,
+      player: {x: PLAYER_START.x, y: PLAYER_START.y, visible: true},
+      objective: 'Swap velocity with moving blocks to survive as long as possible.'
+    };
+
+    // ---------- Helper functions ----------
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      player = {x: PLAYER_START.x, y: PLAYER_START.y, vx: PLAYER_START.vx, vy: PLAYER_START.vy};
+      blocks = [];
+      spawnTimer = 1.2;
+      swapCooldown = 0;
+      score = 0;
+      lives = 3;
+      state = 'playing';
+      speedMultiplier = 1;
+      timeSinceStart = 0;
+      window.__game.state = 'playing';
+      window.__game.score = 0;
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = true;
+      startLoop();
+    }
+
+    function startLoop() {
+      lastTime = performance.now();
+      function tick(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        try {
+          update(dt);
+          render();
+        } catch (e) {
+          console.error('Loop error:', e);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      if (state !== 'playing') return;
+
+      // time tracking
+      timeSinceStart += dt;
+      // speed increase
+      if (Math.floor(timeSinceStart / SPEED_INCREASE_INTERVAL) > Math.floor((timeSinceStart - dt) / SPEED_INCREASE_INTERVAL)) {
+        speedMultiplier = Math.min(speedMultiplier + SPEED_INCREASE_FACTOR, SPEED_CAP / 200);
+      }
+
+      // player movement
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      // wrap horizontally (optional, matches design note)
+      if (player.x > CANVAS_W) player.x -= CANVAS_W;
+      if (player.x < 0) player.x += CANVAS_W;
+
+      // update observable
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = true;
+
+      // cooldown
+      if (swapCooldown > 0) swapCooldown = Math.max(0, swapCooldown - dt);
+
+      // spawn blocks
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnBlock();
+        spawnTimer = SPAWN_BASE + (Math.random()*2-1)*SPAWN_JITTER; // jitter +-0.3
+      }
+
+      // update blocks
+      for (let i = blocks.length-1; i >= 0; i--) {
+        const b = blocks[i];
+        b.x += b.vx * dt * speedMultiplier;
+        b.y += b.vy * dt * speedMultiplier;
+        // collision with player (circle vs AABB)
+        const dx = Math.abs(player.x - b.x - BLOCK_HALF);
+        const dy = Math.abs(player.y - b.y - BLOCK_HALF);
+        if (dx <= PLAYER_RADIUS + BLOCK_HALF && dy <= PLAYER_RADIUS + BLOCK_HALF) {
+          // approximate square-circle collision
+          const distSq = dx*dx + dy*dy;
+          const radSum = PLAYER_RADIUS + BLOCK_HALF;
+          if (distSq <= radSum*radSum) {
+            lives--;
+            if (lives <= 0) {
+              state = 'gameover';
+              window.__game.state = 'gameover';
+            }
+            // remove block after collision
+            blocks.splice(i,1);
+            continue;
+          }
+        }
+        // off-screen removal and survive scoring
+        if (b.x + BLOCK_SIZE < 0 || b.x > CANVAS_W || b.y + BLOCK_SIZE < 0 || b.y > CANVAS_H) {
+          // survived
+          score += SCORE_SURVIVE;
+          window.__game.score = score;
+          blocks.splice(i,1);
+        }
+      }
+    }
+
+    function render() {
+      // clear
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+
+      // draw player
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+      ctx.fillStyle = '#7df9ff';
+      ctx.fill();
+
+      // draw blocks
+      ctx.fillStyle = BLOCK_COLOR;
+      ctx.strokeStyle = BLOCK_OUTLINE;
+      for (const b of blocks) {
+        ctx.fillRect(b.x, b.y, BLOCK_SIZE, BLOCK_SIZE);
+        ctx.strokeRect(b.x, b.y, BLOCK_SIZE, BLOCK_SIZE);
+      }
+
+      // UI: score and lives
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText('Score: ' + score, 10, 20);
+      ctx.fillText('Lives: ' + lives, 10, 40);
+
+      // game over overlay
+      if (state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px Arial';
+        ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 30);
+        ctx.font = '24px Arial';
+        ctx.fillText('Score: ' + score, CANVAS_W/2, CANVAS_H/2 + 10);
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem(HIGH_SCORE_KEY, highScore);
+        }
+        ctx.fillText('High Score: ' + highScore, CANVAS_W/2, CANVAS_H/2 + 40);
+        ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 80);
+      }
+    }
+
+    function spawnBlock() {
+      // decide side
+      const fromLeft = Math.random() < 0.5;
+      const y = 60 + Math.random() * (CANVAS_H - 120);
+      const x = fromLeft ? 0 : CANVAS_W - BLOCK_SIZE;
+      const dir = fromLeft ? 1 : -1;
+      const baseSpeed = 200; // px/s
+      const vy = -50 + Math.random()*100; // [-50,50]
+      const vx = dir * baseSpeed;
+      // safe spawn check
+      const dx = Math.abs(player.x - x - BLOCK_HALF);
+      const dy = Math.abs(player.y - y - BLOCK_HALF);
+      const dist = Math.hypot(dx, dy);
+      const timeToReachX = (dx) / Math.abs(vx);
+      const willReachIn3 = timeToReachX <= 3 && dist < SAFE_RADIUS;
+      if (dist < SAFE_RADIUS && willReachIn3) {
+        // abort spawn; try again after short delay
+        spawnTimer = 0.2; // try again soon
+        return;
+      }
+      blocks.push({x, y, vx, vy, width: BLOCK_SIZE, height: BLOCK_SIZE});
+    }
+
+    function handleSwap(event) {
+      if (state !== 'playing' || swapCooldown > 0) return;
+      // find nearest block within 80px
+      let nearest = null;
+      let nearestDist = 80;
+      for (const b of blocks) {
+        const cx = b.x + BLOCK_HALF;
+        const cy = b.y + BLOCK_HALF;
+        const d = Math.hypot(player.x - cx, player.y - cy);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = b;
+        }
+      }
+      if (nearest) {
+        // swap velocities
+        const tmpVx = player.vx;
+        const tmpVy = player.vy;
+        player.vx = nearest.vx;
+        player.vy = nearest.vy;
+        nearest.vx = tmpVx;
+        nearest.vy = tmpVy;
+        swapCooldown = SWAP_COOLDOWN;
+        // give score if still alive after swap
+        if (state === 'playing') {
+          score += SCORE_SWAP;
+          window.__game.score = score;
+        }
+      }
+    }
+
+    // ---------- Event listeners ----------
+    function init() {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      // input
+      canvas.addEventListener('pointerdown', handleSwap);
+      document.getElementById('restart').addEventListener('click', resetGame);
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'KeyR') resetGame();
+      });
+      resetGame();
+    }
+
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>
