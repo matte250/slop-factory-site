@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Gravity Flip</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0a0f;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    .game-header {
+      padding: 10px;
+      text-align: center;
+    }
+    .game-header h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+    .game-header p {
+      margin: 5px 0;
+    }
+    .game-controls {
+      list-style: none;
+      padding: 0;
+      margin: 5px 0;
+      display: inline-block;
+      text-align: left;
+    }
+    .game-restart {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 5px 10px;
+      background: #ff00aa;
+      color: #000;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    canvas {
+      display: block;
+      background: #0a0a0f;
+    }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Gravity Flip</h1>
+    <p class="game-description">Flip gravity to ride the ceiling and thread through alternating gaps.</p>
+    <ul class="game-controls">
+      <li>Tap / Click / Space to flip gravity</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const restartBtn = document.getElementById('restart');
+
+      const CONFIG = {
+        canvasWidth: 800,
+        canvasHeight: 600,
+        player: {
+          radius: 8,
+          startX: 400,
+          startY: 300,
+          vx: 150, // px/s
+          gravityAcc: 800, // px/s^2
+        },
+        obstacle: {
+          width: 50,
+          gapSize: 120,
+          speed: 250, // leftward px/s
+        },
+        spawn: {
+          first: 3.0,
+          interval: 1.2,
+          safeRadius: 200,
+        },
+      };
+
+      // observable contract
+      window.__game = {
+        state: 'menu', // will become 'playing' immediately
+        score: 0,
+        player: { x: CONFIG.player.startX, y: CONFIG.player.startY, visible: true },
+        objective: 'Flip gravity to ride the ceiling and survive as long as possible.',
+      };
+
+      let state = 'playing';
+      let score = 0;
+      let player = {
+        x: CONFIG.player.startX,
+        y: CONFIG.player.startY,
+        vx: CONFIG.player.vx,
+        vy: 0,
+        gravityDir: 1,
+        radius: CONFIG.player.radius,
+        visible: true,
+      };
+      let obstacles = [];
+      let spawnTimer = CONFIG.spawn.first;
+      let lastTime = null;
+      let loopId = null;
+
+      function resetGame() {
+        if (loopId !== null) cancelAnimationFrame(loopId);
+        // reset state
+        state = 'playing';
+        score = 0;
+        player.x = CONFIG.player.startX;
+        player.y = CONFIG.player.startY;
+        player.vx = CONFIG.player.vx;
+        player.vy = 0;
+        player.gravityDir = 1;
+        player.visible = true;
+        obstacles = [];
+        spawnTimer = CONFIG.spawn.first;
+        updateObservable();
+        lastTime = null;
+        loopId = requestAnimationFrame(loop);
+      }
+
+      function updateObservable() {
+        window.__game.state = state;
+        window.__game.score = score;
+        window.__game.player.x = player.x;
+        window.__game.player.y = player.y;
+        window.__game.player.visible = player.visible;
+      }
+
+      function spawnObstacle() {
+        const obs = {
+          x: CONFIG.canvasWidth + CONFIG.obstacle.width / 2,
+          width: CONFIG.obstacle.width,
+          gapSize: CONFIG.obstacle.gapSize,
+        };
+        obstacles.push(obs);
+      }
+
+      function flipGravity() {
+        player.gravityDir *= -1;
+        updateObservable();
+      }
+
+      function handleInput(e) {
+        if (e.type === 'keydown') {
+          if (e.code === 'Space') {
+            flipGravity();
+          } else if (e.code === 'KeyR') {
+            resetGame();
+          }
+        } else if (e.type === 'click') {
+          flipGravity();
+        }
+      }
+
+      canvas.addEventListener('click', handleInput);
+      document.addEventListener('keydown', handleInput);
+      restartBtn.addEventListener('click', resetGame);
+
+      function rectCircleCollide(rectX, rectY, rectW, rectH, cx, cy, radius) {
+        const closestX = Math.max(rectX, Math.min(cx, rectX + rectW));
+        const closestY = Math.max(rectY, Math.min(cy, rectY + rectH));
+        const dx = cx - closestX;
+        const dy = cy - closestY;
+        return dx * dx + dy * dy < radius * radius;
+      }
+
+      function loop(timestamp) {
+        try {
+          if (!lastTime) lastTime = timestamp;
+          const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+          lastTime = timestamp;
+
+          if (state === 'playing') {
+            // update player
+            player.x += player.vx * dt;
+            player.vy += player.gravityDir * CONFIG.player.gravityAcc * dt;
+            player.y += player.vy * dt;
+
+            // bounds check
+            if (player.y < 0 || player.y > CONFIG.canvasHeight) {
+              state = 'gameover';
+            }
+
+            // spawn obstacles
+            spawnTimer -= dt;
+            if (spawnTimer <= 0) {
+              spawnObstacle();
+              spawnTimer = CONFIG.spawn.interval;
+            }
+
+            // update obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+              const o = obstacles[i];
+              o.x -= CONFIG.obstacle.speed * dt;
+              // score when passed player
+              if (!o.passed && o.x + o.width / 2 < player.x) {
+                o.passed = true;
+                score++;
+              }
+              // collision check
+              const gapTop = o.gapSize;
+              const gapBottom = CONFIG.canvasHeight - o.gapSize;
+              // upper block
+              if (rectCircleCollide(o.x - o.width / 2, 0, o.width, gapTop, player.x, player.y, player.radius)) {
+                state = 'gameover';
+              }
+              // lower block
+              if (rectCircleCollide(o.x - o.width / 2, gapBottom, o.width, CONFIG.canvasHeight - gapBottom, player.x, player.y, player.radius)) {
+                state = 'gameover';
+              }
+              // remove off‑screen obstacles
+              if (o.x + o.width / 2 < 0) {
+                obstacles.splice(i, 1);
+              }
+            }
+          }
+
+          // render
+          ctx.clearRect(0, 0, CONFIG.canvasWidth, CONFIG.canvasHeight);
+          // background (already dark)
+          // draw player
+          ctx.fillStyle = '#7df9ff';
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+          ctx.fill();
+
+          // draw obstacles
+          ctx.fillStyle = '#ff00aa';
+          obstacles.forEach(o => {
+            const left = o.x - o.width / 2;
+            // upper block
+            ctx.fillRect(left, 0, o.width, o.gapSize);
+            // lower block
+            ctx.fillRect(left, CONFIG.canvasHeight - o.gapSize, o.width, o.gapSize);
+          });
+
+          // draw score
+          ctx.fillStyle = '#ffd23f';
+          ctx.font = '20px sans-serif';
+          ctx.fillText('Score: ' + score, 10, 30);
+
+          // game over overlay
+          if (state === 'gameover') {
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0, 0, CONFIG.canvasWidth, CONFIG.canvasHeight);
+            ctx.fillStyle = '#ff00aa';
+            ctx.font = '48px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Game Over', CONFIG.canvasWidth / 2, CONFIG.canvasHeight / 2 - 20);
+            ctx.font = '24px sans-serif';
+            ctx.fillText('Score: ' + score, CONFIG.canvasWidth / 2, CONFIG.canvasHeight / 2 + 20);
+            ctx.fillText('Press R or click Restart', CONFIG.canvasWidth / 2, CONFIG.canvasHeight / 2 + 60);
+          }
+
+          updateObservable();
+        } catch (e) {
+          console.error('Game loop error', e);
+        }
+        loopId = requestAnimationFrame(loop);
+      }
+
+      // start immediately
+      resetGame();
+    })();
+  </script>
+</body>
+</html>
