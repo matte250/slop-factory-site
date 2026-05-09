@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chrono Pulse</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem 1rem; text-align:center; }
+    .game-header h1 { margin:0; font-size:2rem; }
+    .game-description { margin:0.5rem 0; }
+    .game-controls { list-style:none; padding:0; margin:0; display:inline-block; }
+    .game-controls li { margin:0.2rem 0; }
+    #restart { position:absolute; top:1rem; right:1rem; padding:0.5rem 1rem; background:#7df9ff; color:#000; border:none; cursor:pointer; font-weight:bold; }
+    canvas { display:block; margin:auto; background:#111; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Chrono Pulse</h1>
+    <p class="game-description">A dot auto‑advances while obstacles scroll. Briefly tap to freeze obstacle motion while the dot keeps moving, letting you slip through tight gaps. Timing the freeze determines how far you get before obstacles resume.</p>
+    <ul class="game-controls">
+      <li>Tap / click to freeze obstacles (hold briefly)</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const restartBtn = document.getElementById('restart');
+      const STORAGE_PREFIX = 'slop-factory:chrono-pulse:';
+
+      // Game parameters
+      const PLAYER_RADIUS = 10;
+      const PLAYER_SPEED = 200; // px/s
+      const OBSTACLE_SPEED = 150; // px/s (relative to world, moves left)
+      const OBSTACLE_WIDTH = 30;
+      const GAP_HEIGHT = 120;
+      const SPAWN_INTERVAL = 1.5; // seconds
+      const FREEZE_DURATION = 0.4; // seconds obstacles stay frozen
+
+      let player = { x: PLAYER_RADIUS * 2, y: canvas.height / 2 };
+      let obstacles = [];
+      let spawnTimer = 0;
+      let score = 0;
+      let highScore = parseInt(localStorage.getItem(STORAGE_PREFIX + 'highScore')) || 0;
+      let loopId = null;
+      let lastTime = performance.now();
+      let frozen = false;
+      let freezeTimer = 0;
+      let gameOver = false;
+
+      function reset() {
+        // cancel previous loop
+        if (loopId !== null) cancelAnimationFrame(loopId);
+        player = { x: PLAYER_RADIUS * 2, y: canvas.height / 2 };
+        obstacles = [];
+        spawnTimer = SPAWN_INTERVAL;
+        score = 0;
+        frozen = false;
+        freezeTimer = 0;
+        gameOver = false;
+        lastTime = performance.now();
+        loopId = requestAnimationFrame(loop);
+      }
+
+      function spawnObstacle() {
+        // create gap somewhere vertically ensuring reachable area
+        const gapY = Math.random() * (canvas.height - GAP_HEIGHT - 40) + 20; // leave margin
+        obstacles.push({ x: canvas.width + OBSTACLE_WIDTH, gapY, passed: false });
+      }
+
+      function update(dt) {
+        if (gameOver) return;
+        // player auto‑advances
+        player.x += PLAYER_SPEED * dt;
+        // keep player within vertical bounds
+        if (player.y < PLAYER_RADIUS) player.y = PLAYER_RADIUS;
+        if (player.y > canvas.height - PLAYER_RADIUS) player.y = canvas.height - PLAYER_RADIUS;
+
+        // obstacle movement unless frozen
+        if (frozen) {
+          freezeTimer -= dt;
+          if (freezeTimer <= 0) frozen = false;
+        } else {
+          for (let o of obstacles) {
+            o.x -= OBSTACLE_SPEED * dt;
+          }
+        }
+
+        // spawn new obstacles
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnObstacle();
+          spawnTimer = SPAWN_INTERVAL;
+        }
+
+        // check pass and score
+        for (let o of obstacles) {
+          if (!o.passed && o.x + OBSTACLE_WIDTH < player.x) {
+            o.passed = true;
+            score++;
+            if (score > highScore) {
+              highScore = score;
+              localStorage.setItem(STORAGE_PREFIX + 'highScore', highScore);
+            }
+          }
+        }
+
+        // collision detection
+        for (let o of obstacles) {
+          if (o.x < player.x + PLAYER_RADIUS && o.x + OBSTACLE_WIDTH > player.x - PLAYER_RADIUS) {
+            if (player.y - PLAYER_RADIUS < o.gapY || player.y + PLAYER_RADIUS > o.gapY + GAP_HEIGHT) {
+              // collided
+              gameOver = true;
+            }
+          }
+        }
+
+        // remove off‑screen obstacles
+        obstacles = obstacles.filter(o => o.x + OBSTACLE_WIDTH > 0);
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // background stars (simple)
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // draw obstacles
+        ctx.fillStyle = '#ff00aa';
+        for (let o of obstacles) {
+          ctx.fillRect(o.x, 0, OBSTACLE_WIDTH, o.gapY);
+          ctx.fillRect(o.x, o.gapY + GAP_HEIGHT, OBSTACLE_WIDTH, canvas.height - (o.gapY + GAP_HEIGHT));
+        }
+
+        // draw player dot
+        ctx.fillStyle = '#7df9ff';
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+
+        // UI text
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '20px monospace';
+        ctx.fillText('Score: ' + score, 10, 30);
+        ctx.fillText('High: ' + highScore, 10, 55);
+
+        if (gameOver) {
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#ff0000';
+          ctx.font = '48px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+          ctx.fillStyle = '#fff';
+          ctx.font = '24px monospace';
+          ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 20);
+          ctx.fillText('Press R or click Restart', canvas.width / 2, canvas.height / 2 + 60);
+        }
+      }
+
+      function loop(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        try {
+          update(dt);
+          draw();
+        } catch (e) {
+          console.error(e);
+        }
+        loopId = requestAnimationFrame(loop);
+      }
+
+      // input handling
+      function startFreeze() {
+        if (!frozen && !gameOver) {
+          frozen = true;
+          freezeTimer = FREEZE_DURATION;
+        }
+      }
+      canvas.addEventListener('pointerdown', startFreeze);
+      canvas.addEventListener('touchstart', e => { e.preventDefault(); startFreeze(); }, { passive: false });
+
+      function handleKey(e) {
+        if (e.code === 'KeyR') {
+          reset();
+        }
+      }
+      document.addEventListener('keydown', handleKey);
+      restartBtn.addEventListener('click', reset);
+
+      // start immediately
+      reset();
+    })();
+  </script>
+</body>
+</html>
