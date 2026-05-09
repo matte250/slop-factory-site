@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Echo Trail</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:10px;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:5px 0;}
+    .game-controls {margin:0;padding:0;list-style:none;}
+    .game-controls li {font-size:0.9rem;}
+    canvas {display:block;background:#111;}
+    .game-restart {position:absolute;top:10px;right:10px;padding:5px 10px;background:#7df9ff;color:#000;border:none;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Echo Trail</h1>
+    <p class="game-description">A dot leaves a fading clone trail that mirrors its past positions; tap to temporarily reverse time, causing the leading dot to follow the oldest clone while the trail rewinds, letting you dodge incoming obstacles.</p>
+    <ul class="game-controls">
+      <li>Tap / click to reverse time</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ------- Configuration -------
+    const CANVAS_W = 800, CANVAS_H = 600;
+    const PLAYER_RADIUS = 10;
+    const PLAYER_SPEED = 150; // px/s to the right
+    const TRAIL_MAX = 60; // frames approx
+    const REVERSE_DURATION = 0.5; // seconds
+    const OBSTACLE_SIZE = 40;
+    const OBSTACLE_SPEED = 200; // leftward px/s
+    const SPAWN_INTERVAL = 2.0; // seconds
+    const SAFE_RADIUS = 200;
+    const MAX_OBSTACLES = 5;
+
+    // ------- State -------
+    let canvas, ctx;
+    let lastTime = performance.now();
+    let loopId = null;
+    let state = "menu"; // menu | playing | gameover
+    let score = 0;
+    let player = {x: CANVAS_W/2, y: CANVAS_H/2, vx: PLAYER_SPEED, vy: 0, trail: [], reverseActive: false, reverseTimer: 0};
+    let obstacles = [];
+    let spawnTimer = SPAWN_INTERVAL;
+
+    // expose observable contract
+    window.__game = {
+      state: "menu",
+      score: 0,
+      player: {x: player.x, y: player.y, visible: true},
+      objective: "Dodge incoming obstacles using a reversible time trail."
+    };
+
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset state
+      state = "playing";
+      score = 0;
+      player = {x: CANVAS_W/2, y: CANVAS_H/2, vx: PLAYER_SPEED, vy: 0, trail: [], reverseActive: false, reverseTimer: 0};
+      obstacles = [];
+      spawnTimer = SPAWN_INTERVAL;
+      // observable
+      window.__game.state = "playing";
+      window.__game.score = 0;
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = true;
+      startLoop();
+    }
+
+    function gameOver() {
+      state = "gameover";
+      window.__game.state = "gameover";
+      // stop loop but keep last frame rendered; restart via button/key
+    }
+
+    function startLoop() {
+      lastTime = performance.now();
+      function tick(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        try {
+          update(dt);
+          render();
+        } catch (e) {
+          console.error(e);
+        }
+        if (state !== "gameover") {
+          loopId = requestAnimationFrame(tick);
+        }
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      // update observable timer
+      // Reverse handling
+      if (player.reverseActive) {
+        player.reverseTimer -= dt;
+        if (player.reverseTimer <= 0) {
+          player.reverseActive = false;
+        }
+      }
+
+      // Player motion
+      if (player.reverseActive && player.trail.length) {
+        // move to oldest clone (front of array)
+        const oldest = player.trail.shift();
+        player.x = oldest.x;
+        player.y = oldest.y;
+        // trail already shrunk by shift
+      } else {
+        // normal forward motion
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+      }
+
+      // keep player within bounds (wrap horizontally not needed, just clamp)
+      if (player.x < 0) player.x = 0;
+      if (player.x > CANVAS_W) player.x = CANVAS_W;
+      if (player.y < 0) player.y = 0;
+      if (player.y > CANVAS_H) player.y = CANVAS_H;
+
+      // record trail (after movement)
+      player.trail.push({x: player.x, y: player.y});
+      if (player.trail.length > TRAIL_MAX) player.trail.shift();
+
+      // obstacles spawn
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer += SPAWN_INTERVAL;
+        if (obstacles.length < MAX_OBSTACLES) {
+          spawnObstacle();
+        }
+      }
+
+      // update obstacles
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const ob = obstacles[i];
+        ob.x -= OBSTACLE_SPEED * dt;
+        // collision check
+        if (circleRectCollide(player.x, player.y, PLAYER_RADIUS, ob.x, ob.y, OBSTACLE_SIZE, OBSTACLE_SIZE)) {
+          gameOver();
+          return;
+        }
+        // score when passes left edge
+        if (ob.x + OBSTACLE_SIZE < 0) {
+          score++;
+          window.__game.score = score;
+          obstacles.splice(i, 1);
+        }
+      }
+
+      // update observable player info
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = true;
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      // draw trail
+      const len = player.trail.length;
+      for (let i = 0; i < len; i++) {
+        const pt = player.trail[i];
+        const age = i / len; // 0 oldest, 1 newest
+        ctx.fillStyle = `rgba(125,249,255,${0.2 + 0.6 * age})`;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, PLAYER_RADIUS, 0, Math.PI*2);
+        ctx.fill();
+      }
+      // draw player (bright)
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+      ctx.fill();
+
+      // draw obstacles
+      ctx.fillStyle = '#7df9ff';
+      obstacles.forEach(ob => {
+        ctx.fillRect(ob.x - OBSTACLE_SIZE/2, ob.y - OBSTACLE_SIZE/2, OBSTACLE_SIZE, OBSTACLE_SIZE);
+      });
+
+      // UI: score
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: ' + score, 10, 30);
+
+      // game over overlay
+      if (state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.fillStyle = '#ffd23f';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: ' + score, CANVAS_W/2, CANVAS_H/2 + 20);
+        ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 60);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function circleRectCollide(cx, cy, cr, rx, ry, rw, rh) {
+      // find closest point to circle centre within rectangle
+      const closestX = Math.max(rx - rw/2, Math.min(cx, rx + rw/2));
+      const closestY = Math.max(ry - rh/2, Math.min(cy, ry + rh/2));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return (dx*dx + dy*dy) <= cr*cr;
+    }
+
+    function spawnObstacle() {
+      // generate y that respects safe radius rule
+      let attempts = 0;
+      let y;
+      do {
+        y = Math.random() * (CANVAS_H - OBSTACLE_SIZE) + OBSTACLE_SIZE/2;
+        const dx = (CANVAS_W + OBSTACLE_SIZE/2) - player.x; // spawn x relative to player
+        const relSpeed = OBSTACLE_SPEED + PLAYER_SPEED; // closing speed when player moving right
+        const timeToReach = dx / relSpeed;
+        const dist = Math.hypot(dx, y - player.y);
+        if (!(dist < SAFE_RADIUS && timeToReach < 3)) break; // acceptable
+        attempts++;
+      } while (attempts < 10);
+      obstacles.push({x: CANVAS_W + OBSTACLE_SIZE/2, y});
+    }
+
+    // Input handling
+    document.addEventListener('click', () => {
+      if (state !== 'playing') return;
+      player.reverseActive = true;
+      player.reverseTimer = REVERSE_DURATION;
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame();
+      }
+    });
+    const restartBtn = document.getElementById('restart');
+    restartBtn.addEventListener('click', resetGame);
+
+    // Init
+    canvas = document.getElementById('game');
+    ctx = canvas.getContext('2d');
+    // start automatically
+    resetGame();
+  </script>
+</body>
+</html>
