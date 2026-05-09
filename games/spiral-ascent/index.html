@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spiral Ascent</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;}
+    .game-header {text-align:center;margin:1rem;}
+    .game-header h1 {margin:0;font-size:2rem;color:#7df9ff;}
+    .game-header p {margin:0.5rem 0;color:#ffd23f;}
+    .game-controls {list-style:none;padding:0;margin:0;display:flex;gap:1rem;justify-content:center; color:#ff00aa;}
+    canvas {background:#000;display:block;}
+    .game-restart {margin-top:0.5rem;padding:0.5rem 1rem;background:#7df9ff;color:#0a0a0f;border:none;cursor:pointer;font-size:1rem;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Spiral Ascent</h1>
+    <p class="game-description">A dot drifts outward while rotating around the canvas center; each tap rotates its angle to thread through gaps in rotating concentric rings.</p>
+    <ul class="game-controls">
+      <li>Tap / click to rotate</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Configuration -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+    const CENTER_X = canvas.width / 2;
+    const CENTER_Y = canvas.height / 2;
+    const PLAYER_SPEED = 120; // px per second outward
+    const ROTATE_STEP = Math.PI / 6; // 30 degrees per tap
+    const GAP_SIZE = Math.PI / 4; // 45deg gap
+    const RING_SPACING = 100; // distance between rings
+    const RING_THICKNESS = 6;
+    const RING_SPEED = 0.5; // radians per second
+    let loopId = null;
+    // observable game state
+    const __game = {
+      state: 'menu', // menu | playing | gameover
+      score: 0,
+      player: {x: CENTER_X, y: CENTER_Y, visible: true},
+      objective: 'Rotate the dot through gaps in rotating rings to survive.'
+    };
+    window.__game = __game;
+    // ----- Game variables -----
+    let player = {radius: 0, angle: 0};
+    let lastTime = null;
+    let rings = [];
+    let nextRingRadius = RING_SPACING;
+    let score = 0;
+    let gameOver = false;
+    // ----- Helper functions -----
+    function resetGame() {
+      cancelAnimationFrame(loopId);
+      player = {radius: 0, angle: 0};
+      rings = [];
+      nextRingRadius = RING_SPACING;
+      score = 0;
+      gameOver = false;
+      __game.state = 'playing';
+      __game.score = 0;
+      __game.player.visible = true;
+      lastTime = null;
+      loopId = requestAnimationFrame(loop);
+    }
+    function spawnRing(radius) {
+      const rotation = Math.random() * Math.PI * 2;
+      const gapStart = Math.random() * Math.PI * 2;
+      rings.push({radius, rotation, gapStart});
+    }
+    function updateRings(dt) {
+      for (const r of rings) {
+        r.rotation += RING_SPEED * dt;
+      }
+    }
+    function checkCollision(dt) {
+      // Find any ring that the player just crossed (radius >= ring.radius && previous radius < ring.radius)
+      for (const r of rings) {
+        if (Math.abs(player.radius - r.radius) < PLAYER_SPEED * dt) {
+          // compute angle relative to ring rotation
+          const relative = (player.angle - r.rotation) % (Math.PI * 2);
+          const norm = (relative + Math.PI * 2) % (Math.PI * 2);
+          const inGap = norm >= r.gapStart && norm <= r.gapStart + GAP_SIZE;
+          if (!inGap) {
+            gameOver = true;
+            __game.state = 'gameover';
+          } else {
+            score++;
+            __game.score = score;
+          }
+          break;
+        }
+      }
+    }
+    function loop(timestamp) {
+      if (!lastTime) {
+        lastTime = timestamp;
+        // first frame: still in menu until start
+        __game.state = 'playing';
+        __game.player.visible = true;
+      }
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+      lastTime = timestamp;
+      if (!gameOver) {
+        // advance player outward
+        player.radius += PLAYER_SPEED * dt;
+        // update position for observable state
+        const px = CENTER_X + Math.cos(player.angle) * player.radius;
+        const py = CENTER_Y + Math.sin(player.angle) * player.radius;
+        __game.player.x = px;
+        __game.player.y = py;
+        // spawn rings as needed
+        if (player.radius >= nextRingRadius) {
+          spawnRing(nextRingRadius);
+          nextRingRadius += RING_SPACING;
+        }
+        updateRings(dt);
+        checkCollision(dt);
+        draw();
+      }
+      loopId = requestAnimationFrame(loop);
+    }
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // draw rings
+      ctx.strokeStyle = '#7df9ff';
+      ctx.lineWidth = RING_THICKNESS;
+      for (const r of rings) {
+        ctx.save();
+        ctx.translate(CENTER_X, CENTER_Y);
+        ctx.rotate(r.rotation);
+        // draw full circle minus gap
+        ctx.beginPath();
+        ctx.arc(0, 0, r.radius, r.gapStart + GAP_SIZE, r.gapStart + Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+      // draw player dot
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(CENTER_X + Math.cos(player.angle) * player.radius,
+              CENTER_Y + Math.sin(player.angle) * player.radius,
+              8, 0, Math.PI * 2);
+      ctx.fill();
+      // draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: ' + score, 10, 30);
+      // if game over overlay
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', CENTER_X, CENTER_Y - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: ' + score, CENTER_X, CENTER_Y + 20);
+        ctx.fillText('Press R or click Restart', CENTER_X, CENTER_Y + 60);
+      }
+    }
+    // ----- Input -----
+    canvas.addEventListener('click', () => {
+      if (!gameOver) player.angle += ROTATE_STEP;
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame();
+      } else if (!gameOver && (e.key === ' ' || e.key === 'Enter')) {
+        player.angle += ROTATE_STEP;
+      }
+    });
+    restartBtn.addEventListener('click', resetGame);
+    // start automatically
+    resetGame();
+  </script>
+</body>
+</html>
