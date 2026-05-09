@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Phase Ripple</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem 1rem; background:#111; }
+    .game-header h1 { margin:0; font-size:1.5rem; }
+    .game-description { margin:0.3rem 0; font-size:0.9rem; color:#bbb; }
+    .game-controls { margin:0; padding:0; list-style:none; font-size:0.85rem; color:#999; }
+    .game-restart { position:absolute; top:0.5rem; right:0.5rem; background:#7df9ff; color:#000; border:none; padding:0.3rem 0.6rem; cursor:pointer; }
+    canvas { display:block; margin:0 auto; background:#000; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Phase Ripple</h1>
+    <p class="game-description">A dot moves forward automatically; tap or press Space to toggle its phase between two sinusoidal waveforms, each allowing passage through a distinct set of oscillating barriers while blocking the other.</p>
+    <ul class="game-controls">
+      <li>Tap or press Space to toggle phase</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Configuration -----
+    const CONFIG = {
+      playerRadius: 10,
+      playerSpeed: 200, // px/s (world scroll speed)
+      amplitude: 120,
+      barrierWidth: 30,
+      gapHeight: 80,
+      barrierSpacing: 300, // distance between barriers
+      safeRadius: 200,
+      safeTime: 3,
+    };
+
+    // ----- State -----
+    let canvas, ctx;
+    let lastTime = performance.now();
+    let loopId = null;
+    let player = { x: 150, y: 0, phase: 0 };
+    let barriers = [];
+    let spawnTimer = 0;
+    let score = 0;
+    let highScore = 0;
+    let gameOver = false;
+    let startTime = 0;
+
+    // ----- Utility -----
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      player = { x: 150, y: 0, phase: 0 };
+      barriers = [];
+      spawnTimer = CONFIG.safeTime; // first barrier after safe period
+      score = 0;
+      gameOver = false;
+      startTime = performance.now();
+      lastTime = startTime;
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function togglePhase() {
+      if (gameOver) return;
+      player.phase = 1 - player.phase;
+    }
+
+    function spawnBarrier() {
+      // Determine type based on alternating pattern
+      const type = barriers.length % 2; // 0 or 1
+      const x = canvas.width + CONFIG.barrierWidth; // start just off right edge
+      barriers.push({ x, type, passed: false });
+    }
+
+    function updatePlayer(dt) {
+      const t = (performance.now() - startTime) / 1000; // seconds since start
+      const baseY = canvas.height / 2;
+      const wave = player.phase === 0 ? Math.sin(t) : Math.cos(t);
+      player.y = baseY + CONFIG.amplitude * wave;
+    }
+
+    function updateBarriers(dt) {
+      for (let b of barriers) {
+        b.x -= CONFIG.playerSpeed * dt; // world scroll left
+      }
+      // Remove off-screen barriers
+      barriers = barriers.filter(b => b.x + CONFIG.barrierWidth > -50);
+    }
+
+    function checkCollisions() {
+      for (let b of barriers) {
+        // Simple AABB check around player point
+        const withinX = player.x > b.x && player.x < b.x + CONFIG.barrierWidth;
+        if (!withinX) continue;
+        const t = (performance.now() - startTime) / 1000;
+        const baseY = canvas.height / 2;
+        const wave = b.type === 0 ? Math.sin(t) : Math.cos(t);
+        const gapCenter = baseY + CONFIG.amplitude * wave;
+        const gapTop = gapCenter - CONFIG.gapHeight / 2;
+        const gapBottom = gapCenter + CONFIG.gapHeight / 2;
+        if (player.y < gapTop || player.y > gapBottom) {
+          return true; // collision
+        }
+      }
+      return false;
+    }
+
+    function updateScore() {
+      for (let b of barriers) {
+        if (!b.passed && b.x + CONFIG.barrierWidth < player.x) {
+          b.passed = true;
+          score += 1;
+          if (score > highScore) highScore = score;
+        }
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Draw player (neon cyan)
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, CONFIG.playerRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw barriers (magenta walls with neon gap)
+      ctx.fillStyle = '#ff00aa';
+      for (let b of barriers) {
+        const t = (performance.now() - startTime) / 1000;
+        const baseY = canvas.height / 2;
+        const wave = b.type === 0 ? Math.sin(t) : Math.cos(t);
+        const gapCenter = baseY + CONFIG.amplitude * wave;
+        const gapTop = gapCenter - CONFIG.gapHeight / 2;
+        const gapBottom = gapCenter + CONFIG.gapHeight / 2;
+        // Upper wall
+        ctx.fillRect(b.x, 0, CONFIG.barrierWidth, gapTop);
+        // Lower wall
+        ctx.fillRect(b.x, gapBottom, CONFIG.barrierWidth, canvas.height - gapBottom);
+      }
+
+      // Score UI
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.textBaseline = 'top';
+      ctx.fillText('Score: ' + score, 10, 10);
+      ctx.fillText('Hi: ' + highScore, 10, 35);
+
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px monospace';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 40);
+        ctx.font = '24px monospace';
+        ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 10);
+        ctx.fillText('Press R or click Restart', canvas.width / 2, canvas.height / 2 + 50);
+      }
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      try {
+        if (!gameOver) {
+          updatePlayer(dt);
+          // Spawn logic respecting safe time
+          spawnTimer -= dt;
+          if (spawnTimer <= 0) {
+            spawnBarrier();
+            spawnTimer += CONFIG.barrierSpacing / CONFIG.playerSpeed; // time until next barrier based on speed
+          }
+          updateBarriers(dt);
+          if (checkCollisions()) {
+            gameOver = true;
+          }
+          updateScore();
+        }
+        draw();
+      } catch (e) {
+        console.error('Loop error:', e);
+        // keep loop running to show overlay if needed
+        gameOver = true;
+      }
+
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // ----- Input -----
+    function onKey(e) {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePhase();
+      } else if (e.code === 'KeyR') {
+        resetGame();
+      }
+    }
+    function onClick() {
+      togglePhase();
+    }
+
+    // ----- Init -----
+    window.addEventListener('load', () => {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      document.addEventListener('keydown', onKey);
+      canvas.addEventListener('click', onClick);
+      document.getElementById('restart').addEventListener('click', resetGame);
+      resetGame();
+    });
+  </script>
+</body>
+</html>
