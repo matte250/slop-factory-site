@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Warp</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem 1rem; text-align:center; }
+    .game-header h1 { margin:0; font-size:1.5rem; }
+    .game-header p { margin:0.2rem 0 0.5rem; font-size:1rem; }
+    .game-controls { list-style:none; padding:0; margin:0; display:flex; justify-content:center; gap:1rem; font-size:0.9rem; }
+    .game-restart { position:absolute; top:1rem; right:1rem; padding:0.3rem 0.6rem; background:#7df9ff; border:none; color:#000; cursor:pointer; font-weight:bold; }
+    canvas { display:block; margin:0 auto; background:#0a0a0f; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Warp</h1>
+    <p class="game-description">A dot moves forward at constant speed while the background grid pulses in and out; tapping toggles a temporal warp that speeds up the grid while the dot keeps its pace, letting it slip through temporarily widened gaps.</p>
+    <ul class="game-controls">
+      <li>Tap or click to toggle warp</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Game constants -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const PLAYER_X = 200; // constant x position
+    const PLAYER_RADIUS = 8;
+    const PLAYER_SPEED = 120; // px per second (forward)
+    const OBSTACLE_SPEED = 150; // base speed leftward (relative to player)
+    const OBSTACLE_WIDTH = 40;
+    const GAP_HEIGHT = 120;
+    const WARP_GAP_HEIGHT = 250; // widened gap during warp
+    const SPAWN_INTERVAL = 1.5; // seconds
+    const BACKGROUND_PULSE_SPEED = 0.5; // cycles per second
+    
+    // ----- Game state -----
+    let playerY = HEIGHT / 2;
+    let playerVX = PLAYER_SPEED;
+    let obstacles = [];
+    let spawnTimer = 0;
+    let lastTime = performance.now();
+    let loopId = null;
+    let score = 0;
+    let state = 'menu'; // menu | playing | gameover
+    let warpActive = false;
+    let backgroundPhase = 0;
+    
+    // expose observable contract
+    window.__game = {
+      state,
+      score,
+      player: { x: PLAYER_X, y: playerY, visible: true },
+      objective: 'Navigate the dot through gaps; tap to warp the grid for wider gaps.'
+    };
+
+    function updateContract() {
+      window.__game.state = state;
+      window.__game.score = score;
+      window.__game.player.x = PLAYER_X;
+      window.__game.player.y = playerY;
+      window.__game.player.visible = true;
+    }
+
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      playerY = HEIGHT / 2;
+      obstacles = [];
+      spawnTimer = 0;
+      score = 0;
+      state = 'playing';
+      warpActive = false;
+      backgroundPhase = 0;
+      updateContract();
+      lastTime = performance.now();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      state = 'gameover';
+      updateContract();
+      // draw overlay on next frame
+    }
+
+    function spawnObstacle() {
+      const gapY = Math.random() * (HEIGHT - GAP_HEIGHT - 40) + 20; // avoid edges
+      const gap = warpActive ? WARP_GAP_HEIGHT : GAP_HEIGHT;
+      const adjustedGapY = Math.max(20, Math.min(gapY, HEIGHT - gap - 20));
+      obstacles.push({ x: WIDTH, gapY: adjustedGapY, gapHeight: gap, passed: false });
+      warpActive = false; // warp applies to one obstacle only
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      // Update background pulse
+      backgroundPhase = (backgroundPhase + dt * BACKGROUND_PULSE_SPEED) % 1;
+
+      // Update player forward motion (simulated by moving obstacles left faster)
+      const relativeSpeed = OBSTACLE_SPEED + playerVX;
+
+      // Spawn obstacles
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnObstacle();
+        spawnTimer = SPAWN_INTERVAL;
+      }
+
+      // Move obstacles
+      for (const obs of obstacles) {
+        obs.x -= relativeSpeed * dt;
+        // Check collision
+        if (!obs.passed && obs.x < PLAYER_X) {
+          // Player passes obstacle
+          obs.passed = true;
+          score++;
+          updateContract();
+        }
+        if (obs.x + OBSTACLE_WIDTH > PLAYER_X && obs.x < PLAYER_X + PLAYER_RADIUS) {
+          const withinGap = playerY >= obs.gapY && playerY <= obs.gapY + obs.gapHeight;
+          if (!withinGap) {
+            gameOver();
+          }
+        }
+      }
+
+      // Remove off‑screen obstacles
+      obstacles = obstacles.filter(o => o.x + OBSTACLE_WIDTH > 0);
+
+      // Render
+      render();
+
+      // Continue loop if not game over
+      if (state !== 'gameover') {
+        loopId = requestAnimationFrame(loop);
+      } else {
+        // keep drawing final frame with overlay
+        render();
+      }
+    }
+
+    function render() {
+      // Clear
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      // Draw pulsing background grid
+      const gridSpacing = 40;
+      const alpha = 0.3 + 0.2 * Math.sin(backgroundPhase * 2 * Math.PI);
+      ctx.strokeStyle = `rgba(125,249,255,${alpha})`;
+      ctx.lineWidth = 1;
+      for (let x = 0; x <= WIDTH; x += gridSpacing) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, HEIGHT);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= HEIGHT; y += gridSpacing) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(WIDTH, y);
+        ctx.stroke();
+      }
+
+      // Draw obstacles
+      ctx.fillStyle = '#ff00aa';
+      for (const obs of obstacles) {
+        // top rectangle
+        ctx.fillRect(obs.x, 0, OBSTACLE_WIDTH, obs.gapY);
+        // bottom rectangle
+        ctx.fillRect(obs.x, obs.gapY + obs.gapHeight, OBSTACLE_WIDTH, HEIGHT - (obs.gapY + obs.gapHeight));
+      }
+
+      // Draw player dot
+      ctx.fillStyle = '#ffd23f';
+      ctx.beginPath();
+      ctx.arc(PLAYER_X, playerY, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw score
+      ctx.fillStyle = '#7df9ff';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: ' + score, 10, 30);
+
+      // Game over overlay
+      if (state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', WIDTH / 2, HEIGHT / 2 - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: ' + score, WIDTH / 2, HEIGHT / 2 + 20);
+        ctx.fillText('Press R or click Restart', WIDTH / 2, HEIGHT / 2 + 60);
+      }
+    }
+
+    // Input handling
+    canvas.addEventListener('click', () => {
+      if (state === 'playing') warpActive = true;
+    });
+    // also support touch
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (state === 'playing') warpActive = true;
+    }, { passive: false });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame();
+      }
+      // optional vertical control for fun
+      if (state === 'playing') {
+        if (e.key === 'ArrowUp') playerY = Math.max(PLAYER_RADIUS, playerY - 30);
+        if (e.key === 'ArrowDown') playerY = Math.min(HEIGHT - PLAYER_RADIUS, playerY + 30);
+      }
+    });
+    document.getElementById('restart').addEventListener('click', resetGame);
+
+    // Start automatically
+    resetGame();
+  </script>
+</body>
+</html>
