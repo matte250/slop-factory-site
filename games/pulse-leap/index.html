@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Leap</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:0.5rem 1rem;background:#111;display:flex;flex-direction:column;align-items:flex-start;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-description {margin:0.3rem 0;font-size:0.9rem;}
+    .game-controls {margin:0;padding:0;list-style:none;display:flex;gap:0.8rem;font-size:0.85rem;}
+    .game-restart {position:absolute;top:1rem;right:1rem;padding:0.4rem 0.8rem;background:#7df9ff;color:#000;border:none;border-radius:4px;cursor:pointer;}
+    canvas {display:block;background:#0a0a0f;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Leap</h1>
+    <p class="game-description">A dot auto‑scrolls along a sine wave. Tap or click to launch it in a high arc that skips a segment of the wave, letting you clear tight gaps before landing back on the path.</p>
+    <ul class="game-controls">
+      <li>Tap or click to launch</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Game constants -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    const waveAmplitude = 80;
+    const waveFrequency = 0.004; // radians per pixel
+    const playerRadius = 8;
+    const gravity = 500; // px/s²
+    const launchVelocity = -350; // initial vy when launched
+    const obstacleWidth = 30;
+    const obstacleGap = 200; // horizontal distance between obstacles
+    const safeStartTime = 3; // seconds without obstacles
+
+    let lastTime = performance.now();
+    let loopId = null;
+    let obstacles = [];
+    let score = 0;
+    let player = { x: 100, y: 0, vy: 0, launched: false };
+    let gameState = 'menu'; // menu | playing | gameover
+    let spawnTimer = 0;
+    let distanceTravelled = 0;
+    let highScore = 0;
+    const storagePrefix = 'slop-factory:pulse-leap:';
+    // Load persisted highscore if any
+    try {
+      const stored = localStorage.getItem(storagePrefix + 'highScore');
+      if (stored) highScore = Number(stored);
+    } catch (_) {}
+
+    // Observable contract
+    window.__game = {
+      state: gameState,
+      score: score,
+      player: { x: player.x, y: player.y, visible: true },
+      objective: "Launch the dot over gaps in the sine wave and survive as long as possible."
+    };
+
+    function resetGame() {
+      // cancel previous loop
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset state
+      obstacles = [];
+      score = 0;
+      player = { x: 100, y: 0, vy: 0, launched: false };
+      gameState = 'playing';
+      spawnTimer = 0;
+      distanceTravelled = 0;
+      updateObservable();
+      lastTime = performance.now();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function gameOver() {
+      gameState = 'gameover';
+      // keep loop running to show overlay
+      if (score > highScore) {
+        highScore = score;
+        try { localStorage.setItem(storagePrefix + 'highScore', highScore); } catch (_) {}
+      }
+      updateObservable();
+    }
+
+    function updateObservable() {
+      window.__game.state = gameState;
+      window.__game.score = score;
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      // Visibility: player always within canvas bounds when drawn
+      window.__game.player.visible = player.y >= 0 && player.y <= height;
+    }
+
+    function spawnObstacle() {
+      // obstacle is a gap: we create a rectangle that the wave is missing
+      // Represented by x position; when player passes this x, they must be in the air.
+      const x = width + obstacleWidth; // start just off-screen right
+      obstacles.push({ x });
+    }
+
+    function handleInput() {
+      if (gameState !== 'playing') return;
+      if (!player.launched) {
+        player.vy = launchVelocity;
+        player.launched = true;
+      }
+    }
+
+    // Input handlers
+    canvas.addEventListener('pointerdown', handleInput);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame();
+      } else if (e.key === ' ') {
+        handleInput();
+      }
+    });
+    document.getElementById('restart').addEventListener('click', resetGame);
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      if (gameState === 'playing') {
+        // Update player along sine wave
+        player.x += 200 * dt; // horizontal speed
+        const baseY = height / 2 + waveAmplitude * Math.sin(waveFrequency * player.x);
+        // Apply vertical physics if launched
+        if (player.launched) {
+          player.vy += gravity * dt;
+          player.y += player.vy * dt;
+          if (player.y >= baseY) {
+            // land on wave
+            player.y = baseY;
+            player.vy = 0;
+            player.launched = false;
+          }
+        } else {
+          player.y = baseY;
+        }
+        // Move obstacles left relative to player movement
+        obstacles.forEach(o => o.x -= 200 * dt);
+        // Remove passed obstacles and increase score
+        while (obstacles.length && obstacles[0].x < player.x - 20) {
+          obstacles.shift();
+          score++;
+        }
+        // Spawn obstacles after safe start time
+        if (distanceTravelled / 200 > safeStartTime) {
+          spawnTimer -= dt;
+          if (spawnTimer <= 0) {
+            spawnObstacle();
+            spawnTimer = obstacleGap / 200; // time until next obstacle based on speed
+          }
+        }
+        distanceTravelled += 200 * dt;
+        // Collision: if player is on ground (not launched) and obstacle is at player's x
+        const colliding = obstacles.some(o => Math.abs(o.x - player.x) < obstacleWidth / 2 && !player.launched);
+        if (colliding) {
+          gameOver();
+        }
+        updateObservable();
+      }
+      render();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, width, height);
+      // Draw wave (simple sinusoidal line)
+      ctx.strokeStyle = '#7df9ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let x = 0; x <= width; x++) {
+        const y = height / 2 + waveAmplitude * Math.sin(waveFrequency * (x + distanceTravelled));
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      // Draw obstacles as gaps (transparent rectangles) – we simply draw a black rect over the wave
+      ctx.fillStyle = '#0a0a0f';
+      obstacles.forEach(o => {
+        const screenX = o.x - distanceTravelled + player.x; // adjust to camera
+        ctx.fillRect(screenX - obstacleWidth / 2, 0, obstacleWidth, height);
+      });
+      // Draw player
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(player.x - distanceTravelled + player.x, player.y, playerRadius, 0, Math.PI * 2);
+      ctx.fill();
+      // UI: score and highscore
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '16px sans-serif';
+      ctx.fillText(`Score: ${score}`, 10, 20);
+      ctx.fillText(`High: ${highScore}`, 10, 40);
+      // Game over overlay
+      if (gameState === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#fff';
+        ctx.font = '48px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game Over', width / 2, height / 2 - 30);
+        ctx.font = '24px sans-serif';
+        ctx.fillText(`Score: ${score}`, width / 2, height / 2 + 10);
+        ctx.fillText('Press R or click Restart', width / 2, height / 2 + 50);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    // Start automatically
+    resetGame();
+  </script>
+</body>
+</html>
