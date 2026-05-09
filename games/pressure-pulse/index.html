@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pressure Pulse</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;}
+    .game-header {text-align:center;margin:1rem;}
+    .game-controls {list-style:none;padding:0;margin:0;}
+    .game-controls li {margin:0.2rem 0;}
+    canvas {background:#111;display:block;}
+    .game-restart {margin-top:0.5rem;padding:0.5rem 1rem;background:#7df9ff;color:#000;border:none;cursor:pointer;font-weight:bold;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pressure Pulse</h1>
+    <p class="game-description">A dot auto‑advances; each tap pressurizes it, letting it crush soft barriers while pressure drains and speed drops. Time your presses to break through obstacles.</p>
+    <ul class="game-controls">
+      <li>Tap / Click or press Space to pressurize</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Configuration -----
+    const CONFIG = {
+      canvasWidth: 800,
+      canvasHeight: 600,
+      playerRadius: 12,
+      playerBaseSpeed: 120, // px per second
+      pressureMax: 3,
+      pressurePerPress: 1,
+      pressureDrainRate: 0.8, // per second
+      obstacleRadius: 20,
+      obstacleHardness: 2, // hardness threshold to destroy
+      spawnInterval: 1.5, // seconds
+      safeRadius: 200,
+    };
+
+    // ----- State -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    let loopId = null;
+    let lastTime = performance.now();
+    let player = {x: 100, y: CONFIG.canvasHeight/2, speed: CONFIG.playerBaseSpeed, pressure: 0, visible:true};
+    let obstacles = [];
+    let spawnTimer = CONFIG.spawnInterval;
+    let score = 0;
+    let state = 'playing'; // menu | playing | gameover
+    const objective = 'Press to pressurize and crush barriers. Survive as long as possible.';
+    const __game = {
+      state: 'menu',
+      score: 0,
+      player: {x: player.x, y: player.y, visible: true},
+      objective,
+    };
+    window.__game = __game;
+
+    // ----- Input -----
+    function press() {
+      if (state !== 'playing') return;
+      player.pressure = Math.min(CONFIG.pressureMax, player.pressure + CONFIG.pressurePerPress);
+    }
+    function restart() { init(); }
+    document.addEventListener('keydown', (e)=>{
+      if (e.code === 'Space') { press(); }
+      else if (e.code === 'KeyR') { restart(); }
+    });
+    canvas.addEventListener('pointerdown', press);
+    document.getElementById('restart').addEventListener('click', restart);
+
+    // ----- Helpers -----
+    function rnd(min, max) { return Math.random() * (max - min) + min; }
+    function spawnObstacle() {
+      // spawn on right edge, random y, ensure safe distance from player
+      let attempts = 0;
+      while (attempts < 10) {
+        const y = rnd(CONFIG.obstacleRadius, CONFIG.canvasHeight - CONFIG.obstacleRadius);
+        const x = CONFIG.canvasWidth + CONFIG.obstacleRadius;
+        const dx = x - player.x;
+        const dy = y - player.y;
+        const dist = Math.hypot(dx, dy);
+        // time to reach player at current speed (approx)
+        const timeToReach = dist / (player.speed + player.pressure * 30);
+        if (dist > CONFIG.safeRadius && timeToReach > 3) {
+          obstacles.push({x, y, radius: CONFIG.obstacleRadius, hardness: CONFIG.obstacleHardness, passed:false});
+          break;
+        }
+        attempts++;
+      }
+    }
+
+    // ----- Game Loop -----
+    function loop(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        if (state === 'playing') {
+          // update pressure drain
+          if (player.pressure > 0) {
+            player.pressure = Math.max(0, player.pressure - CONFIG.pressureDrainRate * dt);
+          }
+          // speed boost proportional to pressure
+          player.speed = CONFIG.playerBaseSpeed + player.pressure * 30;
+
+          // spawn obstacles
+          spawnTimer -= dt;
+          if (spawnTimer <= 0) {
+            spawnObstacle();
+            spawnTimer = CONFIG.spawnInterval;
+          }
+
+          // move obstacles leftward relative to player movement
+          obstacles.forEach(o => { o.x -= player.speed * dt; });
+
+          // collision / pass check
+          for (let i = obstacles.length - 1; i >= 0; i--) {
+            const o = obstacles[i];
+            const dx = o.x - player.x;
+            const dy = o.y - player.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist < CONFIG.playerRadius + o.radius) {
+              if (player.pressure >= o.hardness) {
+                // crush obstacle
+                obstacles.splice(i, 1);
+                score++;
+              } else {
+                // hit solid obstacle -> game over
+                state = 'gameover';
+                __game.state = 'gameover';
+              }
+            } else if (o.x + o.radius < 0 && !o.passed) {
+              // obstacle passed safely, award point
+              o.passed = true;
+              score++;
+            }
+          }
+        }
+        // render
+        ctx.clearRect(0,0,CONFIG.canvasWidth,CONFIG.canvasHeight);
+        // draw player
+        if (player.visible) {
+          ctx.fillStyle = '#ff00aa';
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, CONFIG.playerRadius, 0, Math.PI*2);
+          ctx.fill();
+        }
+        // draw pressure indicator (outer ring)
+        if (player.pressure > 0) {
+          ctx.strokeStyle = '#7df9ff';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, CONFIG.playerRadius + player.pressure*5, 0, Math.PI*2);
+          ctx.stroke();
+        }
+        // draw obstacles
+        obstacles.forEach(o=>{
+          ctx.fillStyle = '#ffd23f';
+          ctx.beginPath();
+          ctx.arc(o.x, o.y, o.radius, 0, Math.PI*2);
+          ctx.fill();
+        });
+        // draw UI
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px sans-serif';
+        ctx.fillText('Score: '+score, 10, 30);
+        // game over overlay
+        if (state === 'gameover') {
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0,0,CONFIG.canvasWidth,CONFIG.canvasHeight);
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.font = '48px sans-serif';
+          ctx.fillText('Game Over', CONFIG.canvasWidth/2, CONFIG.canvasHeight/2 - 20);
+          ctx.font = '24px sans-serif';
+          ctx.fillText('Score: '+score, CONFIG.canvasWidth/2, CONFIG.canvasHeight/2 + 20);
+          ctx.fillText('Press R or click Restart', CONFIG.canvasWidth/2, CONFIG.canvasHeight/2 + 60);
+        }
+        // update observable
+        __game.state = state;
+        __game.score = score;
+        __game.player.x = player.x;
+        __game.player.y = player.y;
+        __game.player.visible = player.visible;
+        // schedule next frame
+        loopId = requestAnimationFrame(loop);
+      } catch (e) {
+        console.error('Loop error:', e);
+        // stop animation on fatal error
+        cancelAnimationFrame(loopId);
+      }
+    }
+
+    function init() {
+      // cancel any existing loop
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset state
+      player = {x: 100, y: CONFIG.canvasHeight/2, speed: CONFIG.playerBaseSpeed, pressure: 0, visible:true};
+      obstacles = [];
+      spawnTimer = CONFIG.spawnInterval;
+      score = 0;
+      state = 'playing';
+      __game.state = 'playing';
+      __game.score = 0;
+      __game.player = {x: player.x, y: player.y, visible:true};
+      lastTime = performance.now();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // start the game immediately
+    init();
+  </script>
+</body>
+</html>
