@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Dual Pulse</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:10px; text-align:center; }
+    .game-header h1 { margin:0; font-size:2em; }
+    .game-header p { margin:5px 0; }
+    .game-controls { list-style:none; padding:0; margin:0; display:inline-block; }
+    .game-controls li { margin:0 5px; display:inline; }
+    canvas { display:block; margin:0 auto; background:#111; }
+    #restart { position:absolute; top:10px; right:10px; padding:5px 10px; background:#7df9ff; border:none; color:#000; cursor:pointer; }
+    #restart:hover { background:#ff00aa; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Dual Pulse</h1>
+    <p class="game-description">Tap to split a dot into two synchronized copies that travel opposite directions. Steer both through mirrored gaps, losing if either collides.</p>
+    <ul class="game-controls">
+      <li>Space to split</li>
+      <li>Arrow keys to steer</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ------- Configuration -------
+    const CANVAS_W = 800, CANVAS_H = 600;
+    const PLAYER_RADIUS = 8;
+    const PLAYER_SPEED = 200; // px per second (vertical movement speed)
+    const SPLIT_SPEED = 150; // horizontal speed after split
+    const GAP_WIDTH = 120;
+    const OBSTACLE_SPEED = 120; // px/s, downward
+    const SPAWN_INTERVAL = 1.5; // seconds
+    const SAFE_RADIUS = 200; // no hazard can kill within first 3s
+    const MAX_DT = 0.1; // clamp dt
+    const STORAGE_PREFIX = 'slop-factory:dual-pulse:';
+
+    // ------- State -------
+    let canvas, ctx;
+    let players = []; // each {x,y,vx,vy,alive}
+    let obstacles = []; // each {x, y, width, height, side ('left'|'right')}
+    let spawnTimer = 0;
+    let lastTime = performance.now();
+    let loopId = null;
+    let score = 0, highScore = 0;
+    let gameOver = false;
+    let split = false; // whether we have two players
+
+    // ------- Initialization -------
+    function init() {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      resetGame();
+      document.addEventListener('keydown', onKeyDown);
+      document.getElementById('restart').addEventListener('click', resetGame);
+    }
+
+    // ------- Input handling -------
+    function onKeyDown(e) {
+      if (e.code === 'Space') {
+        if (!split) splitPlayers(); // only split once
+      }
+      if (e.code === 'ArrowLeft') {
+        steer(-1);
+      }
+      if (e.code === 'ArrowRight') {
+        steer(1);
+      }
+      if (e.code === 'KeyR') {
+        resetGame();
+      }
+    }
+
+    function steer(dir) {
+      // dir = -1 left, +1 right
+      // horizontal steering applied mirrored to both players
+      players.forEach(p => {
+        if (split) {
+          // opposite horizontal velocity for each side
+          if (p.vx > 0) { // right-moving player
+            p.vx = SPLIT_SPEED * dir; // right player moves right when dir=+1, left when -1
+          } else {
+            p.vx = -SPLIT_SPEED * dir; // left player moves left when dir=-1
+          }
+        } else {
+          // before split, no horizontal movement
+        }
+      });
+    }
+
+    function splitPlayers() {
+      // create two players moving opposite horizontally
+      const base = players[0];
+      // left player moves left, right player moves right
+      const left = {
+        x: base.x,
+        y: base.y,
+        vx: -SPLIT_SPEED,
+        vy: 0,
+        alive: true
+      };
+      const right = {
+        x: base.x,
+        y: base.y,
+        vx: SPLIT_SPEED,
+        vy: 0,
+        alive: true
+      };
+      players = [left, right];
+      split = true;
+    }
+
+    // ------- Game loop -------
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      lastTime = performance.now();
+      function tick(now) {
+        const dt = Math.min((now - lastTime) / 1000, MAX_DT);
+        lastTime = now;
+        try {
+          update(dt);
+          render();
+        } catch (err) {
+          console.error('Loop error:', err);
+        }
+        if (!gameOver) {
+          loopId = requestAnimationFrame(tick);
+        }
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      if (gameOver) return;
+      // Update players
+      players.forEach(p => {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        // keep inside canvas horizontally
+        if (p.x < PLAYER_RADIUS) p.x = PLAYER_RADIUS;
+        if (p.x > CANVAS_W - PLAYER_RADIUS) p.x = CANVAS_W - PLAYER_RADIUS;
+      });
+
+      // Spawn obstacles
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnObstacle();
+        spawnTimer = SPAWN_INTERVAL;
+      }
+
+      // Move obstacles
+      obstacles.forEach(o => {
+        o.y += OBSTACLE_SPEED * dt;
+      });
+      // Remove off-screen obstacles and increase score
+      obstacles = obstacles.filter(o => {
+        if (o.y > CANVAS_H) {
+          // obstacle passed safely
+          score += 1;
+          return false;
+        }
+        return true;
+      });
+
+      // Collision detection
+      for (const p of players) {
+        if (!p.alive) continue;
+        for (const o of obstacles) {
+          if (o.side === 'left') {
+            // left obstacle occupies left side except gap
+            const gapStart = o.x;
+            const gapEnd = o.x + GAP_WIDTH;
+            if (p.x - PLAYER_RADIUS < gapStart || p.x + PLAYER_RADIUS > gapEnd) {
+              // player is in solid area
+              if (p.y + PLAYER_RADIUS > o.y && p.y - PLAYER_RADIUS < o.y + o.height) {
+                gameOver = true;
+              }
+            }
+          } else {
+            // right side
+            const gapStart = o.x;
+            const gapEnd = o.x + GAP_WIDTH;
+            if (p.x - PLAYER_RADIUS < gapStart || p.x + PLAYER_RADIUS > gapEnd) {
+              if (p.y + PLAYER_RADIUS > o.y && p.y - PLAYER_RADIUS < o.y + o.height) {
+                gameOver = true;
+              }
+            }
+          }
+        }
+      }
+
+      if (gameOver) {
+        // persist high score
+        const stored = localStorage.getItem(STORAGE_PREFIX + 'highScore');
+        highScore = stored ? parseInt(stored) : 0;
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem(STORAGE_PREFIX + 'highScore', highScore);
+        }
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // Draw obstacles
+      ctx.fillStyle = '#ff00aa';
+      obstacles.forEach(o => {
+        // left solid area
+        if (o.side === 'left') {
+          // left block
+          ctx.fillRect(0, o.y, o.x, o.height);
+          // right block
+          ctx.fillRect(o.x + GAP_WIDTH, o.y, CANVAS_W - (o.x + GAP_WIDTH), o.height);
+        } else {
+          // right side mirrors left block (same drawing)
+          ctx.fillRect(0, o.y, o.x, o.height);
+          ctx.fillRect(o.x + GAP_WIDTH, o.y, CANVAS_W - (o.x + GAP_WIDTH), o.height);
+        }
+      });
+
+      // Draw players
+      ctx.fillStyle = '#7df9ff';
+      players.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Draw score
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + score, 10, 30);
+      ctx.fillText('High: ' + highScore, 10, 55);
+
+      // Game over overlay
+      if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.fillStyle = '#ffd23f';
+        ctx.textAlign = 'center';
+        ctx.font = '48px monospace';
+        ctx.fillText('Game Over', CANVAS_W / 2, CANVAS_H / 2 - 40);
+        ctx.font = '24px monospace';
+        ctx.fillText('Score: ' + score, CANVAS_W / 2, CANVAS_H / 2);
+        ctx.fillText('High: ' + highScore, CANVAS_W / 2, CANVAS_H / 2 + 30);
+        ctx.fillText('Press R or click Restart', CANVAS_W / 2, CANVAS_H / 2 + 70);
+      }
+    }
+
+    function spawnObstacle() {
+      // Choose random gap position respecting safe radius for first 3 seconds
+      const minX = GAP_WIDTH; // ensure gap not at extreme edges
+      const maxX = CANVAS_W - GAP_WIDTH * 2;
+      const gapX = Math.random() * (maxX - minX) + minX;
+      // Create a pair of left/right obstacles (they are symmetric, we use same data for both sides)
+      const obstacle = {
+        x: gapX,
+        y: -30, // start above canvas
+        width: CANVAS_W,
+        height: 30,
+        side: 'left' // side flag not really used, drawing is symmetric
+      };
+      obstacles.push(obstacle);
+    }
+
+    function resetGame() {
+      // cancel previous loop if any
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset state
+      players = [{ x: CANVAS_W / 2, y: CANVAS_H * 0.8, vx: 0, vy: 0, alive: true }];
+      obstacles = [];
+      spawnTimer = SPAWN_INTERVAL;
+      score = 0;
+      gameOver = false;
+      split = false;
+      // load high score
+      const stored = localStorage.getItem(STORAGE_PREFIX + 'highScore');
+      highScore = stored ? parseInt(stored) : 0;
+      startLoop();
+    }
+
+    // Start everything
+    init();
+  </script>
+</body>
+</html>
