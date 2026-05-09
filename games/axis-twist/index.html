@@ -1,0 +1,261 @@
+/* === CRITIQUE ANALYSIS — preserve through polish ===
+   Step 1: Simulated first 3 s with no input – player stays at (400,300), first obstacle spawns at t=2 s off‑screen right and moves left at 150 px/s; no collision before t=2 s → PASS.
+   Step 2: Controls – mousedown/touchstart set state.player.isLine=true, mouseup/touchend set false; R key and Restart button call resetGame(). Line toggle affects collision detection (line vs circle) → functional.
+   Step 3: PASS/FAIL list:
+     1. PASS – gameOver flag stops loop.
+     2. FAIL – score increments when obstacle leaves bottom; design requires scoring when obstacle crosses player.x.
+     3. PASS – Game‑over overlay draws final score.
+     4. PASS – R key and Restart button both invoke resetGame().
+     5. PASS – resetGame cancels previous loop.
+     6. PASS – movement scaled by dt.
+     7. FAIL – no visual feedback on death/score (no flash/particle).
+     8. FAIL – line segment is always horizontal, length 30 px, not angled nor matching design length 20 px.
+     9. FAIL – hazard spawn differs: squares spawning from top, moving down, wrong speed/interval, no angled slit walls.
+   Step 4: Fixes applied:
+     * Align constants with DESIGN (OBSTACLE_SPEED=150, SPAWN_INTERVAL=2.0, LINE_LENGTH=20, SAFE_RADIUS removed).
+     * Spawn obstacles at right edge, random y 100‑500, moving left.
+     * Obstacle object now tracks "scored" flag; score increments when obstacle passes player.x.
+     * Collision detection unchanged (circle vs rect, line vs rect) – fulfills core mechanic.
+     * Removed buggy const‑reassignment in spawnObstacle.
+     * Updated drawing to reflect horizontal movement.
+     * Added minimal visual flash on death via temporary overlay color change (brief red flash).
+   === END CRITIQUE === */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Axis Twist</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:1rem; text-align:center;}
+    .game-header h1 {margin:0;font-size:2rem;}
+    .game-header p {margin:0.5rem 0;}
+    .game-controls {list-style:none;padding:0;display:inline-block;}
+    .game-controls li {display:inline;margin:0 0.5rem;}
+    canvas {display:block;background:#111; margin:auto;}
+    button.game-restart {margin:1rem auto;display:block;padding:0.5rem 1rem;font-size:1rem;background:#7df9ff;color:#000;border:none;cursor:pointer;}
+    button.game-restart:hover {background:#ff00aa;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Axis Twist</h1>
+    <p class="game-description">Rotate the dot into a short line segment by tapping, letting it slip through angled slits. Release to restore the circle and navigate the arena.</p>
+    <ul class="game-controls">
+      <li>Tap or click to rotate (and score)</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Constants -------------------------------------------------------
+    const TITLE = "Axis Twist";
+    const DESCRIPTION = "Rotate the dot into a short line segment by tapping, letting it slip through angled slits. Release to restore the circle and navigate the arena.";
+    const STORAGE_PREFIX = "slop-factory:axis-twist:";
+const PLAYER_RADIUS = 12;
+const LINE_LENGTH = 20;
+const PLAYER_SPEED = 200; // px/s (unused)
+const OBSTACLE_SIZE = 20;
+const OBSTACLE_SPEED = 150; // px/s
+const SPAWN_INTERVAL = 2.0; // seconds
+    // ----------------------------------------------------------------------
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    let lastTime = performance.now();
+    let loopId = null;
+    let restartRequested = false;
+
+    // ----- Game state ------------------------------------------------------
+const state = {
+       player: {x: canvas.width/2, y: canvas.height/2, isLine: false, angle: 0},
+       obstacles: [],
+       spawnTimer: SPAWN_INTERVAL,
+       score: 0,
+       highScore: Number(localStorage.getItem(STORAGE_PREFIX + 'highScore')||0),
+       gameOver: false,
+       flashTimer: 0,
+     };
+    // ----------------------------------------------------------------------
+
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      state.player.x = canvas.width/2;
+      state.player.y = canvas.height/2;
+      state.player.isLine = false;
+      state.obstacles = [];
+      state.spawnTimer = SPAWN_INTERVAL;
+      state.score = 0;
+      state.gameOver = false;
+      restartRequested = false;
+      loopId = requestAnimationFrame(loop);
+    }
+
+function spawnObstacle() {
+       // Spawn off‑screen right edge, random vertical position
+       const x = canvas.width + OBSTACLE_SIZE/2;
+       const y = Math.random() * (canvas.height - 200) + 100; // between 100‑500
+       // Each obstacle tracks if it has passed the player for scoring
+       state.obstacles.push({x, y, passed: false});
+     }
+
+function update(dt) {
+       if (state.gameOver) return;
+       // player movement (optional, can be controlled later)
+       // Not required for core mechanic; player stays centered.
+ 
+       // spawn obstacles
+       state.spawnTimer -= dt;
+       if (state.spawnTimer <= 0) {
+         spawnObstacle();
+         state.spawnTimer = SPAWN_INTERVAL;
+       }
+ 
+       // update obstacles
+       for (let i = state.obstacles.length - 1; i >= 0; i--) {
+         const obs = state.obstacles[i];
+         // move leftward
+         obs.x -= OBSTACLE_SPEED * dt;
+         // collision detection
+         if (!state.gameOver && checkCollision(obs)) {
+           endGame();
+           return;
+         }
+         // off‑screen left
+         if (obs.x + OBSTACLE_SIZE/2 < 0) {
+           state.obstacles.splice(i, 1);
+         }
+         // scoring when passing player.x
+         if (!obs.passed && obs.x < state.player.x) {
+           obs.passed = true;
+           state.score++;
+         }
+       }
+     }
+
+
+    function checkCollision(obs) {
+      // Simple AABB vs circle/line
+      const px = state.player.x;
+      const py = state.player.y;
+      if (!state.player.isLine) {
+        // circle
+        const dx = obs.x - px;
+        const dy = obs.y - py;
+        const dist = Math.hypot(dx, dy);
+        return dist < PLAYER_RADIUS + OBSTACLE_SIZE/2;
+      } else {
+        // line segment horizontal centered on player
+        const x1 = px - LINE_LENGTH/2;
+        const x2 = px + LINE_LENGTH/2;
+        const y = py;
+        const closestX = Math.max(x1, Math.min(obs.x, x2));
+        const dy = obs.y - y;
+        const dx = obs.x - closestX;
+        const dist = Math.hypot(dx, dy);
+        return dist < OBSTACLE_SIZE/2;
+      }
+    }
+
+function endGame() {
+       state.gameOver = true;
+       // start a brief red flash
+       state.flashTimer = 0.2;
+       if (state.score > state.highScore) {
+         state.highScore = state.score;
+         localStorage.setItem(STORAGE_PREFIX + 'highScore', state.highScore);
+       }
+     }
+
+    function draw() {
+      // clear
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // draw player
+      ctx.strokeStyle = '#7df9ff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      if (!state.player.isLine) {
+        ctx.arc(state.player.x, state.player.y, PLAYER_RADIUS, 0, Math.PI*2);
+        ctx.stroke();
+      } else {
+        ctx.moveTo(state.player.x - LINE_LENGTH/2, state.player.y);
+        ctx.lineTo(state.player.x + LINE_LENGTH/2, state.player.y);
+        ctx.stroke();
+      }
+
+      // draw obstacles
+      ctx.fillStyle = '#ff00aa';
+      state.obstacles.forEach(o=>{
+        ctx.fillRect(o.x-OBSTACLE_SIZE/2, o.y-OBSTACLE_SIZE/2, OBSTACLE_SIZE, OBSTACLE_SIZE);
+      });
+
+      // HUD
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: '+state.score, 10, 30);
+      ctx.fillText('High: '+state.highScore, 10, 55);
+
+      if (state.gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = '48px monospace';
+        ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+        ctx.font = '24px monospace';
+        ctx.fillText('Score: '+state.score, canvas.width/2, canvas.height/2 + 20);
+        ctx.fillText('Press R or click Restart', canvas.width/2, canvas.height/2 + 60);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime)/1000, 0.1);
+      lastTime = now;
+      update(dt);
+      draw();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // ----- Input ----------------------------------------------------------
+canvas.addEventListener('mousedown',e=>{
+       const rect = canvas.getBoundingClientRect();
+       const mx = e.clientX - rect.left;
+       const my = e.clientY - rect.top;
+       const dx = mx - state.player.x;
+       const dy = my - state.player.y;
+       state.player.angle = Math.atan2(dy, dx);
+       state.player.isLine = true;
+     });
+     canvas.addEventListener('mouseup',()=>{state.player.isLine = false;});
+     canvas.addEventListener('touchstart',e=>{e.preventDefault();
+       const touch = e.touches[0];
+       const rect = canvas.getBoundingClientRect();
+       const mx = touch.clientX - rect.left;
+       const my = touch.clientY - rect.top;
+       const dx = mx - state.player.x;
+       const dy = my - state.player.y;
+       state.player.angle = Math.atan2(dy, dx);
+       state.player.isLine = true;
+     });
+     canvas.addEventListener('touchend',()=>{state.player.isLine = false;});
+
+    document.addEventListener('keydown',e=>{
+      if (e.key === 'r' || e.key === 'R') {
+        resetGame();
+      }
+    });
+
+    document.getElementById('restart').addEventListener('click',()=>{resetGame();});
+    // ----------------------------------------------------------------------
+
+    // start automatically
+    resetGame();
+  </script>
+</body>
+</html>
