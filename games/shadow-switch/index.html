@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shadow Switch</title>
+  <style>
+    body{margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden}
+    .game-header{padding:0.5rem 1rem;background:#111;display:flex;flex-direction:column;align-items:center}
+    .game-header h1{margin:0;font-size:1.5rem;color:#7df9ff}
+    .game-description{margin:0.25rem 0;color:#ffd23f}
+    .game-controls{margin:0;padding:0;list-style:none;display:flex;gap:1rem;color:#ff00aa}
+    canvas{display:block;background:#000}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Shadow Switch</h1>
+    <p class="game-description">Tap to toggle between parallel light and shadow layers, each with its own moving barriers. Keep the single dot safe by timing your switches so it never collides in either world.</p>
+    <ul class="game-controls">
+      <li>Tap / click to toggle layers</li>
+      <li>R to restart after game over</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const DOT_RADIUS = 8;
+  const DOT_X = W/2, DOT_Y = H/2;
+  let layer = 0; // 0 = light, 1 = shadow
+  let barriers = [];
+  let frame = 0;
+  let score = 0;
+  let running = true;
+  let audioCtx;
+  const beep = (freq)=>{
+    try {
+      if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = freq;
+      osc.connect(gain);gain.connect(audioCtx.destination);
+      gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.1, audioCtx.currentTime+0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.2);
+      osc.start(); osc.stop(audioCtx.currentTime+0.2);
+    } catch(e){/* ignore audio errors */}
+  };
+  const spawnBarrier = ()=>{
+    const lane = Math.random()<0.5?0:1; // which layer
+    const size = 20 + Math.random()*30;
+    const speed = 2 + frame/1500; // progressive
+    barriers.push({x: -size, y: Math.random()*H, w:size, h:10, vx:speed, layer:lane});
+  };
+  const reset = ()=>{
+    layer = 0; barriers = []; frame = 0; score = 0; running = true;
+    // pre‑populate a few barriers
+    for(let i=0;i<5;i++) spawnBarrier();
+  };
+  const toggleLayer = ()=>{layer = 1-layer; beep(440);};
+  const gameOver = ()=>{running = false; beep(150);};
+  // input
+  canvas.addEventListener('click',()=>{if(running){toggleLayer();} else {reset();}});
+  document.addEventListener('keydown',e=>{
+    if(e.key==='r' || e.key==='R') reset();
+    if(running && (e.key===' '||e.key==='Enter')) toggleLayer();
+  });
+  // particles for idle background
+  const stars = [];
+  for(let i=0;i<50;i++) stars.push({x:Math.random()*W, y:Math.random()*H, r:1+Math.random()*2, vy:0.2+Math.random()*0.5});
+  const draw = (dt)=>{
+    // clear
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillRect(0,0,W,H);
+    // stars
+    ctx.fillStyle = '#555';
+    for(const s of stars){
+      ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();
+      s.y+=s.vy; if(s.y>H){s.y=0; s.x=Math.random()*W;}
+    }
+    // barriers
+    ctx.fillStyle = layer===0?'#7df9ff':'#ff00aa';
+    for(const b of barriers){
+      if(b.layer===layer){
+        ctx.fillRect(b.x,b.y,b.w,b.h);
+      }
+    }
+    // dot
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();ctx.arc(DOT_X,DOT_Y,DOT_RADIUS,0,Math.PI*2);
+    ctx.fill();
+    // score UI
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Score: '+Math.floor(score),10,20);
+    // layer indicator
+    ctx.fillText('Layer: '+(layer===0?'Light':'Shadow'),10,40);
+    if(!running){
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#ff00aa';
+      ctx.font = '48px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Game Over',W/2,H/2-20);
+      ctx.font = '24px sans-serif';
+      ctx.fillText('Score: '+Math.floor(score),W/2,H/2+20);
+      ctx.fillText('Press R or click to restart',W/2,H/2+60);
+    }
+  };
+  const update = dt=>{
+    if(!running) return;
+    // move barriers
+    for(const b of barriers){b.x+=b.vx;}
+    // remove off‑screen
+    barriers = barriers.filter(b=>b.x < W+ b.w);
+    // spawn new periodically
+    if(frame%90===0) spawnBarrier();
+    // collision check only for current layer
+    for(const b of barriers){
+      if(b.layer===layer){
+        const dx = Math.abs(DOT_X - (b.x + b.w/2));
+        const dy = Math.abs(DOT_Y - (b.y + b.h/2));
+        if(dx < DOT_RADIUS + b.w/2 && dy < DOT_RADIUS + b.h/2){
+          gameOver(); break;
+        }
+      }
+    }
+    score += dt/1000; // seconds
+  };
+  let last = performance.now();
+  function loop(now){
+    const dt = now - last; last = now;
+    try {
+      update(dt);
+      draw(dt);
+    } catch(e){
+      console.error(e);
+    }
+    frame++;
+    requestAnimationFrame(loop);
+  }
+  reset();
+  requestAnimationFrame(loop);
+})();
+  </script>
+</body>
+</html>
