@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Scale Shift</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:0.5rem 1rem;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:0.2rem 0;}
+    .game-controls {margin:0;padding:0;list-style:none;}
+    .game-controls li {font-size:0.9rem;}
+    canvas {display:block; background:#0a0a0f;}
+    .game-restart {position:absolute;top:10px;right:10px;z-index:10;padding:0.4rem 0.8rem;background:#7df9ff;color:#000;border:none;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Scale Shift</h1>
+    <p class="game-description">A dot auto‑advances; each tap cycles its overall size (small, medium, large) so you can slip through gaps sized for that scale, rewarding precise timing.</p>
+    <ul class="game-controls">
+      <li>Tap or press Space to cycle size</li>
+      <li>Press R or click Restart to reset the game</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+  const SAFE_RADIUS = 200; // px
+  const PLAYER_SPEED = 200; // px/s (relative motion of obstacles)
+  const HAZARD_SPEED = 200; // px/s leftward
+  const SPAWN_INTERVAL = 1.2; // seconds
+  const GAP_MARGIN = 20; // extra space around player size
+
+  const sizes = [10, 20, 30]; // radii for small, medium, large
+  let loopId = null;
+  let lastTime = performance.now();
+  let spawnTimer = 0;
+  let hazards = [];
+  let score = 0;
+  let gameState = 'menu'; // menu | playing | gameover
+  let player = {
+    x: 100,
+    y: canvas.height / 2,
+    radiusIdx: 0,
+    radius: sizes[0],
+    visible: true,
+  };
+
+  // observable contract
+  window.__game = {
+    state: gameState,
+    score: score,
+    player: {x: player.x, y: player.y, visible: player.visible},
+    objective: 'Avoid hazards by cycling size to fit gaps.'
+  };
+
+  function resetGame() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    // reset variables
+    spawnTimer = 0;
+    hazards = [];
+    score = 0;
+    player.radiusIdx = 0;
+    player.radius = sizes[player.radiusIdx];
+    player.x = 100;
+    player.y = canvas.height / 2;
+    player.visible = true;
+    gameState = 'playing';
+    updateContract();
+    lastTime = performance.now();
+    loopId = requestAnimationFrame(loop);
+  }
+
+  function updateContract() {
+    window.__game.state = gameState;
+    window.__game.score = score;
+    window.__game.player.x = player.x;
+    window.__game.player.y = player.y;
+    window.__game.player.visible = player.visible;
+  }
+
+  function cycleSize() {
+    player.radiusIdx = (player.radiusIdx + 1) % sizes.length;
+    player.radius = sizes[player.radiusIdx];
+  }
+
+  function spawnHazard() {
+    // hazard is a vertical bar with a gap
+    const gapHeight = player.radius * 2 + GAP_MARGIN;
+    const gapY = Math.random() * (canvas.height - gapHeight) + gapHeight / 2;
+    hazards.push({x: canvas.width, gapY, gapHeight, passed:false});
+  }
+
+  function handleInput(e) {
+    if (e.type === 'keydown' && e.code === 'Space') {
+      cycleSize();
+    } else if (e.type === 'keydown' && e.code === 'KeyR') {
+      resetGame();
+    } else if (e.type === 'click') {
+      // treat any click/tap as size cycle
+      cycleSize();
+    }
+  }
+
+  // Input listeners
+  window.addEventListener('keydown', handleInput);
+  window.addEventListener('click', handleInput);
+  restartBtn.addEventListener('click', resetGame);
+
+  function loop(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      if (gameState === 'playing') {
+        // update hazards
+        for (let i = hazards.length - 1; i >= 0; i--) {
+          const h = hazards[i];
+          h.x -= HAZARD_SPEED * dt;
+          // check pass for scoring
+          if (!h.passed && h.x + 20 < player.x) { // 20 = hazard thickness approx
+            h.passed = true;
+            score++;
+          }
+          // collision detection
+          const inGap = player.y > h.gapY - h.gapHeight / 2 && player.y < h.gapY + h.gapHeight / 2;
+          const collides = h.x < player.x + player.radius && h.x + 20 > player.x - player.radius && !inGap;
+          if (collides) {
+            gameState = 'gameover';
+          }
+          // remove off-screen hazards
+          if (h.x + 20 < 0) hazards.splice(i, 1);
+        }
+
+        // spawn hazards respecting safe radius and 3‑second rule
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          // only spawn if safe distance > PLAYER_SPEED*3
+          const minSafeX = player.x + PLAYER_SPEED * 3;
+          if (canvas.width - minSafeX > 0) {
+            spawnHazard();
+          }
+          spawnTimer = SPAWN_INTERVAL;
+        }
+      }
+
+      // render
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // draw hazards
+      ctx.fillStyle = '#ff00aa';
+      for (const h of hazards) {
+        // top block
+        ctx.fillRect(h.x, 0, 20, h.gapY - h.gapHeight / 2);
+        // bottom block
+        ctx.fillRect(h.x, h.gapY + h.gapHeight / 2, 20, canvas.height - (h.gapY + h.gapHeight / 2));
+      }
+
+      // draw player
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + score, 10, 30);
+
+      if (gameState === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px monospace';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = '24px monospace';
+        ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 20);
+        ctx.fillText('Press R or click Restart', canvas.width / 2, canvas.height / 2 + 60);
+      }
+
+      updateContract();
+    } catch (err) {
+      console.error('Loop error:', err);
+    }
+    loopId = requestAnimationFrame(loop);
+  }
+
+  // start immediately
+  resetGame();
+})();
+  </script>
+</body>
+</html>
