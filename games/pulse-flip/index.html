@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Flip</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:1rem;background:#111;}
+    .game-header h1 {margin:0;font-size:2rem;}
+    .game-header p {margin:0.5rem 0;}
+    .game-controls {margin:0;padding:0;list-style:none;}
+    .game-controls li {margin:0.2rem 0;}
+    canvas {display:block;margin:0 auto;background:#000;}
+    .game-restart {position:absolute;top:1rem;right:1rem;padding:0.5rem 1rem;background:#7df9ff;color:#000;border:none;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Flip</h1>
+    <p class="game-description">A dot rolls along a straight path while the corridor walls pulse between thick and thin. Tap to invert the pulse phase, opening gaps for the dot to slip through.</p>
+    <ul class="game-controls">
+      <li>Tap / click to invert pulse phase</li>
+      <li>Press R or click Restart button to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+<script>
+/*
+=== CRITIQUE ANALYSIS
+TODO: add critique analysis.
+=== END CRITIQUE ===
+*/
+
+ // ----- Game constants -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const WALL_WIDTH = 20;
+    const WALL_SPEED = 200; // px/s
+    const SPAWN_INTERVAL = 1.5; // seconds
+    const GAP_SIZE = 120;
+    const PLAYER_RADIUS = 8;
+    const PLAYER_X = 100;
+    const PLAYER_SPEED = 300; // px/s for up/down
+    const BG_COLOR = '#0a0a0f';
+    const NEON_COLOR = '#7df9ff';
+    // ----- Game state -----
+    let state = 'menu'; // will become 'playing' immediately
+    let score = 0;
+    let phaseThick = true; // true = thick (no gap)
+    let walls = [];
+    let spawnTimer = SPAWN_INTERVAL;
+    let lastTime = null;
+    let loopId = null;
+    const player = {
+      x: PLAYER_X,
+      y: canvas.height / 2,
+      radius: PLAYER_RADIUS,
+      vy: 0,
+      visible: true,
+    };
+    // Observable contract
+    window.__game = {
+      state: 'menu',
+      score: 0,
+      player: {x: PLAYER_X, y: canvas.height / 2, visible: true},
+      objective: "Navigate the dot through pulsing corridors by tapping to invert the pulse phase.",
+    };
+    // ----- Helper functions -----
+    function resetGame() {
+      cancelAnimationFrame(loopId);
+      state = 'playing';
+      score = 0;
+      phaseThick = true;
+      walls = [];
+      spawnTimer = SPAWN_INTERVAL;
+      player.y = canvas.height / 2;
+      player.vy = 0;
+      lastTime = null;
+      updateContract();
+      loopId = requestAnimationFrame(loop);
+    }
+    function gameOver() {
+      state = 'gameover';
+      updateContract();
+    }
+    function togglePhase() {
+      phaseThick = !phaseThick;
+    }
+    function spawnWall() {
+      const gapY = Math.random() * (canvas.height - GAP_SIZE) + GAP_SIZE / 2;
+      walls.push({x: canvas.width, gapY});
+    }
+    function updateContract() {
+      window.__game.state = state;
+      window.__game.score = score;
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = player.visible;
+    }
+    // ----- Input -----
+    canvas.addEventListener('mousedown', togglePhase);
+    canvas.addEventListener('touchstart', e => {e.preventDefault(); togglePhase();});
+    document.addEventListener('keydown', e => {
+      if (e.code === 'ArrowUp' || e.code === 'KeyW') player.vy = -PLAYER_SPEED;
+      if (e.code === 'ArrowDown' || e.code === 'KeyS') player.vy = PLAYER_SPEED;
+      if (e.code === 'KeyR') resetGame();
+    });
+    document.addEventListener('keyup', e => {
+      if (['ArrowUp','KeyW','ArrowDown','KeyS'].includes(e.code)) player.vy = 0;
+    });
+    document.getElementById('restart').addEventListener('click', resetGame);
+    // ----- Main loop -----
+    function loop(timestamp) {
+      if (!lastTime) lastTime = timestamp;
+      const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+      lastTime = timestamp;
+      if (state === 'playing') {
+        // Update player
+        player.y += player.vy * dt;
+        player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+        // Spawn walls
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnWall();
+          spawnTimer = SPAWN_INTERVAL;
+        }
+        // Move walls and check collisions
+        for (let i = walls.length - 1; i >= 0; i--) {
+          const w = walls[i];
+          w.x -= WALL_SPEED * dt;
+          // Collision when wall passes player.x
+          if (w.x <= player.x && w.x + WALL_WIDTH > player.x) {
+            const inGap = Math.abs(player.y - w.gapY) < GAP_SIZE / 2;
+            if (phaseThick || !inGap) {
+              gameOver();
+            } else {
+              // passed safely, increase score
+              score++;
+            }
+          }
+          // Remove off-screen walls
+          if (w.x + WALL_WIDTH < 0) walls.splice(i, 1);
+        }
+        updateContract();
+      }
+      draw();
+      if (state !== 'gameover') {
+        loopId = requestAnimationFrame(loop);
+      }
+    }
+    function draw() {
+      // Clear
+      ctx.fillStyle = BG_COLOR;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Draw walls
+      ctx.fillStyle = NEON_COLOR;
+      walls.forEach(w => {
+        if (phaseThick) {
+          ctx.fillRect(w.x, 0, WALL_WIDTH, canvas.height);
+        } else {
+          // Thin: draw two parts leaving gap
+          const topHeight = w.gapY - GAP_SIZE / 2;
+          const bottomY = w.gapY + GAP_SIZE / 2;
+          if (topHeight > 0) ctx.fillRect(w.x, 0, WALL_WIDTH, topHeight);
+          if (bottomY < canvas.height) ctx.fillRect(w.x, bottomY, WALL_WIDTH, canvas.height - bottomY);
+        }
+      });
+      // Draw player
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+      // Draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + score, 10, 30);
+      // Game over overlay
+      if (state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = '48px monospace';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = '24px monospace';
+        ctx.fillText('Score: ' + score, canvas.width / 2, canvas.height / 2 + 20);
+        ctx.fillText('Press R or click Restart', canvas.width / 2, canvas.height / 2 + 60);
+      }
+    }
+    // Start automatically
+    resetGame();
+  </script>
+</body>
+</html>
