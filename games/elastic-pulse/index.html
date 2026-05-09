@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Elastic Pulse</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:0.5rem 1rem;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:0.2rem 0;font-size:1rem;}
+    .game-controls {margin:0;padding:0;list-style:none;display:flex;gap:1rem; font-size:0.9rem;}
+    canvas {display:block; background:#111; margin:auto;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Elastic Pulse</h1>
+    <p class="game-description">Tap to stretch the dot horizontally, allowing it to slip through narrow vertical gaps; release to snap back and avoid colliding with side walls.</p>
+    <ul class="game-controls">
+      <li>Hold mouse button (or Space) to stretch</li>
+      <li>Release to snap back</li>
+      <li>Press R to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+
+      // Game state
+      let player = {x: 100, y: height/2, radius: 12, stretch: 1, speedY: 0};
+      const GRAVITY = 0.4;
+      const JUMP = -8;
+      const STRETCH_FACTOR = 2.5; // horizontal stretch multiplier
+      let obstacles = [];
+      const OBSTACLE_SPACING = 1800; // ms
+      const OBSTACLE_SPEED = 3;
+      const GAP_HEIGHT = 120; // vertical gap size
+      let lastObstacleTime = 0;
+      let score = 0;
+      let highScore = Number(localStorage.getItem('slop-factory:elastic-pulse:highScore')||0);
+      let running = true;
+      let stretchActive = false;
+      let audioCtx;
+      const tone = (freq, dur) => {
+        try {
+          if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.frequency.value = freq;
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime+0.01);
+          osc.start();
+          osc.stop(audioCtx.currentTime+dur);
+        } catch(e) {}
+      };
+
+      const reset = () => {
+        player = {x: 100, y: height/2, radius: 12, stretch: 1, speedY: 0};
+        obstacles = [];
+        lastObstacleTime = 0;
+        score = 0;
+        running = true;
+        stretchActive = false;
+      };
+
+      const createObstacle = () => {
+        const gapY = Math.random() * (height - GAP_HEIGHT - 40) + 20; // keep within margins
+        obstacles.push({x: width, gapY, passed:false});
+      };
+
+      const update = (dt) => {
+        if (!running) return;
+        // player physics
+        player.speedY += GRAVITY;
+        player.y += player.speedY;
+        // keep within bounds
+        if (player.y + player.radius > height) { player.y = height - player.radius; player.speedY = 0; }
+        if (player.y - player.radius < 0) { player.y = player.radius; player.speedY = 0; }
+        // stretch handling
+        player.stretch = stretchActive ? STRETCH_FACTOR : 1;
+        // obstacles
+        obstacles.forEach(ob => { ob.x -= OBSTACLE_SPEED; });
+        // remove offscreen
+        obstacles = obstacles.filter(ob => ob.x + 20 > 0);
+        // generate new
+        if (performance.now() - lastObstacleTime > OBSTACLE_SPACING) {
+          createObstacle();
+          lastObstacleTime = performance.now();
+        }
+        // collision & scoring
+        obstacles.forEach(ob => {
+          // check if player passes the obstacle x position
+          if (!ob.passed && ob.x + 20 < player.x) {
+            ob.passed = true;
+            score++;
+            highScore = Math.max(highScore, score);
+            localStorage.setItem('slop-factory:elastic-pulse:highScore', highScore);
+          }
+          // collision only when obstacle is at player's x range
+          if (ob.x < player.x + player.radius && ob.x + 20 > player.x - player.radius) {
+            const leftEdge = player.x - player.radius * player.stretch;
+            const rightEdge = player.x + player.radius * player.stretch;
+            // vertical collision with walls except gap
+            if (player.y - player.radius < ob.gapY || player.y + player.radius > ob.gapY + GAP_HEIGHT) {
+              // hit wall
+              running = false;
+            }
+          }
+        });
+      };
+
+      const draw = () => {
+        // clear
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0,0,width,height);
+        // draw player
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.scale(player.stretch, 1);
+        ctx.beginPath();
+        ctx.arc(0,0,player.radius,0,Math.PI*2);
+        ctx.fillStyle = '#7df9ff';
+        ctx.fill();
+        ctx.restore();
+        // draw obstacles
+        ctx.fillStyle = '#ff00aa';
+        obstacles.forEach(ob => {
+          // top part
+          ctx.fillRect(ob.x,0,20,ob.gapY);
+          // bottom part
+          ctx.fillRect(ob.x,ob.gapY+GAP_HEIGHT,20,height - (ob.gapY+GAP_HEIGHT));
+        });
+        // UI
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '20px sans-serif';
+        ctx.fillText('Score: '+score, 10,30);
+        ctx.fillText('High: '+highScore, 10,58);
+        if (!running) {
+          ctx.fillStyle = 'rgba(0,0,0,0.7)';
+          ctx.fillRect(0,0,width,height);
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.font = '48px sans-serif';
+          ctx.fillText('Game Over', width/2, height/2-20);
+          ctx.font = '24px sans-serif';
+          ctx.fillText('Press R to Restart', width/2, height/2+30);
+        }
+      };
+
+      const loop = (timestamp) => {
+        try {
+          const dt = timestamp - (loop.last ?? timestamp);
+          loop.last = timestamp;
+          update(dt);
+          draw();
+        } catch(e) {
+          console.error('Loop error',e);
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+
+      // Input handling
+      const setStretch = (active) => {
+        if (stretchActive===active) return;
+        stretchActive = active;
+        tone(active?440:220,0.1);
+      };
+
+      window.addEventListener('mousedown',()=>setStretch(true));
+      window.addEventListener('mouseup',()=>setStretch(false));
+      window.addEventListener('keydown', (e) => {
+        if (e.code==='Space') { e.preventDefault(); setStretch(true); }
+        if (e.code==='KeyR') { reset(); }
+      });
+      window.addEventListener('keyup', (e) => {
+        if (e.code==='Space') setStretch(false);
+      });
+    })();
+  </script>
+</body>
+</html>
