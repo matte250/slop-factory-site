@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Curvature Control</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden}
+    .game-header {padding:0.5rem 1rem;background:#111}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:0.2rem 0;font-size:0.9rem;color:#ccc}
+    .game-controls {margin:0;padding:0;list-style:none;font-size:0.8rem;color:#aaa}
+    .game-controls li::before {content:"- ";}
+    canvas {display:block;background:#0a0a0f;}
+    #restart {position:absolute;top:10px;right:10px;padding:0.4rem 0.8rem;background:#ff00aa;color:#fff;border:none;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Curvature Control</h1>
+    <p class="game-description">A dot auto‑advances forward; each tap toggles a gentle left‑or‑right curvature, letting you steer through winding tunnels without changing speed.</p>
+    <ul class="game-controls">
+      <li>Tap or click to toggle curvature</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const restartBtn = document.getElementById('restart');
+      const WIDTH = canvas.width;
+      const HEIGHT = canvas.height;
+      const PLAYER_RADIUS = 8;
+      const PLAYER_SPEED = 200; // px per second forward
+      const CURVATURE_ANGLE = Math.PI/6; // max turn per second
+      const HAZARD_RADIUS = 12;
+      const HAZARD_SPEED = 150; // towards player direction
+      const SPAWN_INTERVAL = 1.5; // seconds
+      const SAFE_RADIUS = 150; // start safe zone
+
+      let loopId = null;
+      let lastTime = performance.now();
+      let curvature = 0; // -1 left, 0 straight, 1 right (current curvature direction)
+      let curvatureSign = 1; // toggles sign on tap
+
+      const state = {
+        player: {x: WIDTH/2, y: HEIGHT-100, vx: 0, vy: -PLAYER_SPEED},
+        hazards: [],
+        spawnTimer: SPAWN_INTERVAL,
+        score: 0,
+        gameState: 'playing', // menu not used
+      };
+
+      // expose observable contract
+      window.__game = {
+        state: 'playing',
+        score: 0,
+        player: {x: state.player.x, y: state.player.y, visible: true},
+        objective: "Steer the dot through tunnels without hitting hazards."
+      };
+
+      function reset(){
+        if(loopId!==null) cancelAnimationFrame(loopId);
+        state.player.x = WIDTH/2;
+        state.player.y = HEIGHT-100;
+        state.player.vx = 0;
+        state.player.vy = -PLAYER_SPEED;
+        state.hazards = [];
+        state.spawnTimer = SPAWN_INTERVAL;
+        state.score = 0;
+        curvature = 0;
+        curvatureSign = 1;
+        state.gameState = 'playing';
+        window.__game.state = 'playing';
+        window.__game.score = 0;
+        window.__game.player.visible = true;
+        lastTime = performance.now();
+        loopId = requestAnimationFrame(loop);
+      }
+
+      function toggleCurvature(){
+        curvatureSign *= -1;
+        curvature = curvatureSign * CURVATURE_ANGLE;
+      }
+
+      function spawnHazard(){
+        // spawn at random x at top, moving downwards
+        const x = Math.random()* (WIDTH - 2*HAZARD_RADIUS) + HAZARD_RADIUS;
+        const y = -HAZARD_RADIUS;
+        // ensure safe radius rule
+        const dx = x - state.player.x;
+        const dy = y - state.player.y;
+        const dist = Math.hypot(dx, dy);
+        const minTime = dist / HAZARD_SPEED;
+        if(dist < SAFE_RADIUS && minTime < 3) return; // reject
+        state.hazards.push({x, y, radius: HAZARD_RADIUS});
+      }
+
+      function update(dt){
+        if(state.gameState !== 'playing') return;
+        // player moves forward (up) with optional curvature sideways
+        state.player.x += Math.sin(curvature) * PLAYER_SPEED * dt;
+        state.player.y += state.player.vy * dt;
+        // keep inside bounds
+        if(state.player.x < PLAYER_RADIUS) state.player.x = PLAYER_RADIUS;
+        if(state.player.x > WIDTH-PLAYER_RADIUS) state.player.x = WIDTH-PLAYER_RADIUS;
+        if(state.player.y < PLAYER_RADIUS) state.player.y = PLAYER_RADIUS;
+        if(state.player.y > HEIGHT-PLAYER_RADIUS) state.player.y = HEIGHT-PLAYER_RADIUS;
+        // hazards move down
+        for(const h of state.hazards){
+          h.y += HAZARD_SPEED * dt;
+        }
+        // remove off-screen hazards
+        state.hazards = state.hazards.filter(h=>h.y - h.radius <= HEIGHT);
+        // spawn logic
+        state.spawnTimer -= dt;
+        if(state.spawnTimer <= 0){
+          spawnHazard();
+          state.spawnTimer = SPAWN_INTERVAL;
+        }
+        // collision
+        for(const h of state.hazards){
+          const d = Math.hypot(state.player.x - h.x, state.player.y - h.y);
+          if(d < PLAYER_RADIUS + h.radius){
+            state.gameState = 'gameover';
+            window.__game.state = 'gameover';
+            break;
+          }
+        }
+        // score based on time survived
+        state.score += dt * 10; // arbitrary scaling
+        window.__game.score = Math.floor(state.score);
+        window.__game.player.x = state.player.x;
+        window.__game.player.y = state.player.y;
+        window.__game.player.visible = true;
+      }
+
+      function draw(){
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0,0,WIDTH,HEIGHT);
+        // draw player
+        ctx.fillStyle = '#7df9ff';
+        ctx.beginPath();
+        ctx.arc(state.player.x, state.player.y, PLAYER_RADIUS,0,Math.PI*2);
+        ctx.fill();
+        // draw hazards
+        ctx.fillStyle = '#ff00aa';
+        for(const h of state.hazards){
+          ctx.beginPath();
+          ctx.arc(h.x, h.y, h.radius,0,Math.PI*2);
+          ctx.fill();
+        }
+        // draw score
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '20px monospace';
+        ctx.fillText('Score: '+Math.floor(state.score), 10, 30);
+        // game over overlay
+        if(state.gameState === 'gameover'){
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0,0,WIDTH,HEIGHT);
+          ctx.fillStyle = '#ff00aa';
+          ctx.textAlign = 'center';
+          ctx.font = '40px monospace';
+          ctx.fillText('Game Over', WIDTH/2, HEIGHT/2-20);
+          ctx.fillStyle = '#ffd23f';
+          ctx.font = '24px monospace';
+          ctx.fillText('Score: '+Math.floor(state.score), WIDTH/2, HEIGHT/2+20);
+          ctx.fillText('Press R or click Restart', WIDTH/2, HEIGHT/2+60);
+        }
+      }
+
+      function loop(now){
+        const dt = Math.min((now - lastTime)/1000, 0.1);
+        lastTime = now;
+        try{
+          update(dt);
+          draw();
+        }catch(e){
+          console.error(e);
+        }
+        if(state.gameState !== 'gameover'){
+          loopId = requestAnimationFrame(loop);
+        }
+      }
+
+      // Input handlers
+      canvas.addEventListener('click', toggleCurvature);
+      canvas.addEventListener('touchstart', function(e){ e.preventDefault(); toggleCurvature(); }, {passive:false});
+      document.addEventListener('keydown', function(e){
+        if(e.key === 'r' || e.key === 'R') reset();
+        if(e.key === ' ') toggleCurvature();
+      });
+      restartBtn.addEventListener('click', reset);
+
+      // start the game immediately
+      reset();
+    })();
+  </script>
+</body>
+</html>
