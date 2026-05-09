@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Color Switch</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0a0a0f;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    .game-header {
+      padding: 0.5rem 1rem;
+    }
+    .game-header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+    }
+    .game-description {
+      margin: 0.2rem 0 0.5rem;
+    }
+    .game-controls {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    canvas {
+      display: block;
+      background: #1a1a2e;
+    }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Color Switch</h1>
+    <p class="game-description">Tap to change the dot’s hue while colored barriers scroll toward it. Align the dot’s color with each barrier’s matching opening to survive as long as possible.</p>
+    <ul class="game-controls">
+      <li>Click or tap to change dot color</li>
+      <li>R key to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+
+      // Game state
+      let dotHue = 0; // 0..360
+      let score = 0;
+      let gameOver = false;
+      let barriers = [];
+      const barHeight = 20;
+      const gapWidth = 80;
+      const speed = 2;
+      const dotRadius = 10;
+      const dotX = W / 2;
+      const dotY = H - 80;
+      let lastBarrierY = H;
+
+      const hueToColor = h => `hsl(${h}, 100%, 55%)`;
+
+        // Background stars for subtle animation
+        const stars = [];
+        const starCount = 80;
+        for (let i = 0; i < starCount; i++) {
+          stars.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            r: Math.random() * 1.5 + 0.5,
+            speed: Math.random() * 0.3 + 0.1,
+          });
+        }
+
+        // Visual feedback timers
+        let flashAlpha = 0; // score flash (white)
+        let hitFlashAlpha = 0; // hit flash (red)
+        let shakeIntensity = 0; // death shake intensity
+
+        // Audio setup (lazy init)
+        let audioCtx = null;
+        const playTone = (freq, duration) => {
+          try {
+            if (!audioCtx) {
+              audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+          } catch (e) {
+            console.error('Audio error', e);
+          }
+        };
+
+      const spawnBarrier = () => {
+        const gapX = Math.random() * (W - gapWidth);
+        const hue = Math.floor(Math.random() * 360);
+        barriers.push({ y: H, gapX, hue });
+      };
+
+const reset = () => {
+          dotHue = 0;
+          score = 0;
+          gameOver = false;
+          barriers = [];
+          lastBarrierY = H;
+          shakeIntensity = 0;
+          spawnBarrier();
+        };
+
+      const handleClick = () => {
+        dotHue = (dotHue + 60) % 360; // change hue on each tap/click
+      };
+
+      const handleKey = e => {
+        if (e.key === 'r' || e.key === 'R') {
+          reset();
+        } else if (e.key === ' ') {
+          // space also changes color
+          handleClick();
+        }
+      };
+
+      canvas.addEventListener('click', handleClick);
+      window.addEventListener('keydown', handleKey);
+      // initial spawn
+      reset();
+
+      const render = () => {
+        try {
+// clear
+            ctx.clearRect(0, 0, W, H);
+
+            // apply screen shake if needed
+            ctx.save();
+            if (shakeIntensity > 0) {
+              const dx = (Math.random() - 0.5) * shakeIntensity;
+              const dy = (Math.random() - 0.5) * shakeIntensity;
+              ctx.translate(dx, dy);
+            }
+
+            // update and draw background stars
+            for (let s of stars) {
+              s.y += s.speed;
+              if (s.y > H) s.y = 0;
+              ctx.fillStyle = '#fff';
+              ctx.beginPath();
+              ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            // flash overlay for score
+            if (flashAlpha > 0) {
+              ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+              ctx.fillRect(0, 0, W, H);
+              flashAlpha *= 0.85;
+            }
+            // flash overlay for hit
+            if (hitFlashAlpha > 0) {
+              ctx.fillStyle = `rgba(255,0,0,${hitFlashAlpha})`;
+              ctx.fillRect(0, 0, W, H);
+              hitFlashAlpha *= 0.85;
+            }
+
+
+          // move barriers
+          for (let i = barriers.length - 1; i >= 0; i--) {
+            const b = barriers[i];
+            b.y -= speed;
+            // draw bar background
+            ctx.fillStyle = '#222';
+            ctx.fillRect(0, b.y, W, barHeight);
+            // draw gap with its color
+            ctx.fillStyle = hueToColor(b.hue);
+            ctx.fillRect(b.gapX, b.y, gapWidth, barHeight);
+            // check collision when barrier reaches dot line
+            if (!gameOver && b.y + barHeight >= dotY && b.y <= dotY + dotRadius) {
+              // dot's hue must match gap hue (within 30 degrees)
+              const diff = Math.abs(((dotHue - b.hue + 540) % 360) - 180);
+if (diff > 30) {
+                  gameOver = true;
+                  // death feedback
+                  hitFlashAlpha = 0.7;
+                  shakeIntensity = 6;
+                  playTone(110, 0.3);
+                } else {
+                  score++;
+                  // score feedback
+                  flashAlpha = 0.4;
+                  playTone(660, 0.1);
+                  // remove this barrier
+                  barriers.splice(i, 1);
+                  // ensure next barrier spawns after some distance
+                  lastBarrierY = b.y;
+                }
+            }
+            // remove off-screen barriers
+            if (b.y + barHeight < 0) {
+              barriers.splice(i, 1);
+            }
+          }
+
+          // spawn new barrier when needed
+          if (!gameOver && lastBarrierY < H - 150) {
+            spawnBarrier();
+            lastBarrierY = H;
+          }
+
+          // draw dot
+          ctx.beginPath();
+          ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+          ctx.fillStyle = hueToColor(dotHue);
+          ctx.fill();
+
+          // draw score
+          ctx.fillStyle = '#fff';
+          ctx.font = '20px sans-serif';
+          ctx.fillText(`Score: ${score}`, 10, 30);
+
+          // game over overlay
+          if (gameOver) {
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = '#ff5555';
+            ctx.font = '48px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Game Over', W / 2, H / 2 - 20);
+            ctx.font = '24px sans-serif';
+            ctx.fillText(`Score: ${score}`, W / 2, H / 2 + 20);
+            ctx.fillText('Press R to restart', W / 2, H / 2 + 60);
+          }
+          // restore after possible shake
+          ctx.restore();
+        } catch (err) {
+          console.error('Animation loop error', err);
+        }
+        if (!gameOver) {
+          requestAnimationFrame(render);
+        }
+      };
+
+      // start loop
+      requestAnimationFrame(render);
+    })();
+  </script>
+</body>
+</html>
