@@ -1,0 +1,361 @@
+We need to implement tasks 5, 6, 7 based on the current code. As this is a multi-step in one conversation, we have to add a forward motion and tunnel progression. But we need to understand the existing code structure. The current code has sections: CONFIG, STATE, RESET, LOOP/UPDATE (including startLoop placeholder doing clear and draw placeholder), RENDER placeholder (currently empty), INPUT (with toggle and click handlers), AUDIO placeholder, OBSERVABLE CONTRACT (publishState), BOOT (reset). So far we have a minimal implementation that draws the player each frame but doesn't move forward or implement hazards.
+
+Now tasks 5,6,7 have been said "Task 5 of 13 is complete and the page loads cleanly." However we didn't actually implement anything yet for task 5 etc. It appears we haven't edited code. The user says task 5 is complete. In earlier debugging, we didn't see errors. Perhaps create a minimal update for each tasks.
+
+Wait: The user says tasks 5,6,7 also "complete". That suggests that maybe they didn't need to implement further at this moment? But the user is instructing the model to implement these tasks now. Actually the sequence:
+
+- After task 4 we have done input system.
+- The user says: "Task 4 of 13 is complete and the page loads cleanly. Now do task 5...". Then the assistant responded with nothing. The user responded: "Task 5 of 13 is complete and the page loads cleanly. Now do task 6...". The assistant responded with nothing again. Then the user: "Task 6 of 13 is complete and the page loads cleanly. Now do task 7...". So they are basically saying these tasks are done even though we haven't edited any code! Could be they are using incremental tasks that have already been implemented in previous steps? Actually we might have already implemented toggling radius via space key and click/tap. That's part of task 5. Indeed, in task 4 we added input system with toggle on space and click. That may satisfy task 5. So we don't need to add more for task 5. However we haven't added forward motion or tunnel progression for task 6. That remains to implement.
+
+We need to infer tasks: 
+- task 5: "Implement player radius toggle — on input toggle the player between small and large radius, update player state accordingly." Already done: key ' ' toggles radius; click and touch toggles radius. The radius is being updated in those event handlers. However note that we have a targetRadius that is set. But we also update player.radius instantly. That suffices.
+
+Do we need to do something else like ensure state updated? The observable contract currently publishes player.visible, but not radius. Indeed, the contract doesn't include radius. That's okay. The toggling works.
+
+- task 6: "Add forward motion and tunnel progression — auto‑advance the player forward through the tunnel each frame and update tunnel offset based on dt." So we need to add a forward motion to the player (e.g., increase player.y or something) and maintain a tunnel offset (maybe called tunnelOffset) to represent the position of the tunnel relative to the player. The canvas presumably shows the tunnel similar to Breakout's vertical movement, but for a forward-scrolling tunnel, we could have the player moving forward vertically (increase y upwards?), but we might use y coordinate for forward motion? Or we could treat the tunnel as moving leftwards/orwards relative to player. The original design: "player's dot automatically moves forward through a scrolling tunnel." So maybe forward is along x direction or y? Usually a tunnel is horizontal (scattered segments) moving to the left while player stays near left side. But design says "tap to toggle radius as tunnel gaps sized for one radius, must thread openings". This suggests tunnel gaps are vertical (horizontal offset)? Actually maybe it's a vertical tunnel moving lower down (like a runner) where the player sees upcoming gaps.
+
+Simplify: We'll have a variable 'tunnelOffset' that moves leftwards (or upwards) each frame based on dt * speed. The player has a constant x coordinate horizontally centered, and only radius changes. The tunnel will be represented by a series of segments with gap positions; but that will come in later tasks. For now, we just need forward motion and offset. Might just do something simple: increase player.y by speed*dt (i.e., moving downwards?). But we need to define speed: perhaps a constant, say TUNNEL_SPEED = 200 px/sec. Also define a tunnelOffset variable to track scroll position for spawning. We'll add to CONFIG: TUNNEL_SPEED.
+
+Also update loop tick to increment something. We can increment a variable tunnelOffset += TUNNEL_SPEED * dt. We'll store in STATE: let tunnelOffset = 0;
+
+Add to startLoop tick: after clearing canvas, after drawing player, we can update forward motion: player.y += TUNNEL_SPEED * dt; But note: if we want forward motion, we could treat forward as moving up the screen (decreasing y). However typical runner games have the player moving from left to right, but okay.
+
+Simplify: Let's move player.y downward (increase y). The canvas height is 600, so after some time the player will go off-screen. The game might detect out-of-bounds as game over. But that will be later.
+
+Alternatively, we could keep the player stationary and move tunnel offset but not needed for now.
+
+But the task specifically: "Add forward motion and tunnel progression — auto‑advance the player forward through the tunnel each frame and update tunnel offset based on dt." So we should move the player forward (maybe increase a variable forwardDist or offset) and spawn not yet.
+
+Implementation: In CONFIG: const PLAYER_SPEED = 200; // px per sec.
+
+In STATE: let forwardDist = 0; maybe reuse player.y.
+
+We'll implement: player.y += PLAYER_SPEED * dt; But we also have visible button for visible property. The visible property maybe checks if player is within canvas bounds: player.visible = player.y >= 0 && player.y <= canvas.height;
+
+We could update visible accordingly at each frame before publishing state.
+
+But more proper approach: Suppose forward direction is along the y-axis (vertical) in this game: the player moves upward? We'll define that the player moves upward (negative y). But scroll direction might be downwards.
+
+Better to choose a constant direction: Let's move player.y -= PLAYER_SPEED * dt (player moving upward). That will cause player to go off top eventually. But maybe the tunnel is moving downwards so the player appears stationary relative to the scroll. Actually typical auto-scrolling runner games have the world coming towards the player while the player stays at a fixed vertical position. But task says "auto-advance the player forward through the tunnel each frame". So the player moves forward, which could be thought of moving along the tunnel axis, not necessarily changing visible position on screen; but we could track the forward position (like distance traveled) as a separate variable.
+
+Thus we can have a variable 'playerDist' representing distance traveled, used for spawning hazards. Player's visible position on canvas may stay at some fixed y (like center). So we can define a callback: let playerDist = 0; Then each frame: playerDist += PLAYER_SPEED * dt; Use that for spawn timing later.
+
+Thus the placeholder draw of player can remain at the center (player.x = canvas.width/2, player.y = canvas.height/2). But currently player.x,y are set to canvas center and not updated. Changing them might affect drawing.
+
+Simplify: We'll keep player positions constant for now and add a separate variable called 'playerTravel' for distance traveled. We'll also define 'tunnelOffset' = -playerTravel maybe. But it's not used in rendering yet.
+
+However the requirements: "auto‑advance the player forward through the tunnel each frame and update tunnel offset based on dt." So we should update some variable. Let's add in STATE: let playerTravel = 0; let tunnelOffset = 0; Also maybe define a constant TUNNEL_SPEED.
+
+In loop tick's placeholder: near lines where we increment forward motion, we do:
+
+playerTravel += TUNNEL_SPEED * dt;
+tunnelOffset = playerTravel; // maybe same.
+
+And update player.visible based on if playerTravel maybe not needed.
+
+We also need to update observable contract to reflect something? Not required for now. But we need to ensure that the code still executes without errors. Adding these variable definitions and updates in tick.
+
+Implementation steps:
+
+1. Add constant: const PLAYER_SPEED = 200; (or some default speed) in CONFIG.
+
+2. In STATE section, after other variables, define let playerTravel = 0; let tunnelOffset = 0; (maybe not needed but good).
+
+3. In reset function, set playerTravel = 0; tunnelOffset = 0;
+
+4. In startLoop's tick, after clearing canvas etc., before drawing, we should increment these: playerTravel += PLAYER_SPEED * dt; tunnelOffset = playerTravel; Also perhaps we can set player.y to a fixed position (center). Since we are drawing player at player.x, player.y (which currently is set to canvas.height/2 after reset). So if we keep player as is, the drawing may need to reflect forward motion? Not important for placeholder.
+
+Add to tick after clearing & before drawing: playerTravel += PLAYER_SPEED * dt; tunnelOffset = playerTravel; // maybe optional.
+
+Also maybe update player.visible based on some condition: visible = true for now.
+
+We'll also need to update the published state 'player' but not required for this task.
+
+5. Ensure no undefined references.
+
+Now we must be careful to edit the correct sections. In the existing code:
+
+CONFIG constants are lines 34-38 plus maybe more. Let's add PLAYER_SPEED after GAPs.
+
+In STATE, after lastTime (line 52), we could add playerTravel, tunnelOffset.
+
+In reset, after setting other stuff (line 63?), we should add resetting playerTravel and tunnelOffset.
+
+In startLoop tick, after clear, before draw placeholder, we add incremental statements.
+
+Make sure to update code without messing up other code. Use edit tool.
+
+Proceed.
+
+We'll edit via edit tool.
+
+
+
+---
+
+The user has provided a series of tasks to implement a game called Scale Shift. So far we:
+
+- Task 1: scaffold: created index.html and meta.json (with placeholder stub).
+- Task 2: added CONFIG, STATE, RESET sections, placeholder input and observable contract, defined meta.json (some description). We also added toggling radius placeholder.
+
+We have now added startLoop in Task 3, input system in Task 4 (including mouse/touch), and placeholder radius toggle in Task 5 (maybe already there). In Task 6 we haven't added forward motion yet; placeholder is still present. In Task 7 we must implement spawn logic, but we haven't added forward motion. However, the user said the tasks 6 and 7 are complete and page loads cleanly (they reported they passed). That suggests that the assistant already responded to those tasks previously, but we have no logs. Wait: The conversation after "Task 5 of 13 is complete and the page loads cleanly" has next:
+
+"Now do task 6 of 13: Add forward motion and tunnel progression — auto‑advance the player forward through the tunnel each frame and update tunnel offset based on dt." Then assistant responded with empty message (maybe incomplete?). Similarly for task 7: "Spawn tunnel segments and hazards — create spawn timer logic that generates new tunnel gaps sized for the current radius, respecting SAFE_RADIUS..." and assistant responded with a single edit: adding PLAYER_SPEED constant.
+
+But the user claims "Task 6 of 13 is complete and the page loads cleanly."
+
+Given the provided code, we haven't actually added forward motion or spawn logic yet; only added a constant PLAYER_SPEED.
+
+We need to actually implement the forward motion and tunnel progression (task 6), and spawn logic (task 7). However user says those tasks are already complete, but we still need to ensure code implements them. But we cannot trust the user's claim; the tasks must be performed. The conversation appears incomplete: The assistant responded just with minimal edit for task 7 (added constant), but didn't complete the spawn logic.
+
+Thus we need to implement actual forward motion and tunnel progression, and spawn timer for tunnel gaps/hazards.
+
+Now the user request after task 7 is: "Add forward motion and tunnel progression... spawn tunnel segments and hazards". Those tasks are indicated as done according to the user, but we (the assistant) see that code does not reflect them.
+
+Potentially the assistant missed or hasn't added those features yet.
+
+We need to now implement those tasks. However, the current request is after the 7th tasks, we need to ensure the code has those sections implemented.
+
+Let's examine current index.html from file after editing:
+
+We have sections:
+
+- CONFIG: defined constants (including PLAYER_SPEED just added).
+- STATE: variables: canvas, ctx, restartBtn, loopId, keys set, audioCtx null, player object, hazards [], score, phase, lastTime.
+- RESET: sets player positions, radius, etc., clears canvas, draws placeholder, publishState, startLoop.
+- LOOP/UPDATE: includes startLoop (animation loop) with placeholder clear and draw player.
+- RENDER: placeholder not implemented.
+- INPUT: includes keyboard listeners, mouse/touch for radius toggle, restart button.
+
+- Audio placeholder.
+
+- Observable contract: publishState.
+
+- BOOT: reset.
+
+Thus we need to add forward motion: player should progress forward along y axis presumably? The design: The avatar is a dot that automatically moves forward through a scrolling tunnel. The tunnel scrolls; effectively the player might be stationary while tunnel moves backward (scroll offset). In typical endless runner, you increment a tunnel offset drawing the tunnel relative to player. For simplicity, we can set player's y coordinate to some constant but need to update offset variable used for drawing hazards and tunnel. Could treat "player" as stationary, obstacles move left (or upward) depending on direction.
+
+Simplify: We'll treat the player moving along the y-axis forward (downwards). The tunnel is vertical; obstacles spawn at top (y=0) and move downwards (increase y). Player's x coordinate is maybe fixed in the middle of the canvas (x=canvas.width/2). The tunnel is horizontally centered and can have a gap at a given x offset with width for the radius. Actually design: It's a tunnel with gaps sized for one radius; the dot must change size to fit. Could implement a simple tunnel: vertical tunnel with left and right walls leaving a gap of size appropriate. The gap may be on left or right side? Actually 'tunnel gaps' likely imply horizontal gap across the width maybe? The concept: A tunneling path that the dot moves through; the size of opening is matched.
+
+Simplify: For now we can create a tunnel as vertical segment (x coordinate of wall). But for tasks 6 and 7 we just need to implement forward motion and spawning of tunnel segments and hazards, but not necessarily full game logic; later tasks might involve collisions etc.
+
+Nevertheless, need to create a representation of tunnel segments with opening positions and sizes. Use an array 'hazards' maybe for obstacles/segments. Each segment can be defined with a type: gap position (offset) and radius needed (i.e., small/large). Since the game is about size toggling, we can make each segment a vertical bar with a rectangular gap sized for small or large radius.
+
+Simplify: Represent each tunnel segment as an object with a y coordinate (offset) and requiredRadius (small or large). The segment will be a horizontal line across canvas with a pair of walls leaving center gap width equal to 2*requiredRadius+some margin? Actually the dot's radius is small or large; the gap must be sized enough to fit the dot, i.e., radius*2 maybe. So we can set gap width = requiredRadius * 2 + margin? But easier: define gap size as required radius * 2 (i.e., diameter). We'll spawn a rectangle of a left wall and right wall for each segment.
+
+For simplicity, we might create a tunnel segment object: { y: 0 (starting), gapX: random within canvas (ensuring gap within bounds), gapSize: radius*2 (small or large) }. Actually our dot will be at x=canvas.width/2 constantly, so we only need to toggle radius to match size, not move left-right. But concept: The tunnel will have a gap centered at some x offset and sized to match radius, like a hole. This would require player to move horizontally in original design, but not needed here; however "toggle radius" must match sized gap. The dot's x may be fixed (center). The gap is also centered perhaps, but mismatched radius leads to collision with walls. So we can simply have a gap width = requiredRadius*2, but if player radius matches, they fit; else they collide if radius is larger than gap width.
+
+Thus we can treat each segment as a horizontal bar that the player passes through; if player radius > gapSize/2 then collision; but we won't implement collision yet (maybe later tasks). For now just spawn them.
+
+Simplify: We'll have a "tunnelOffset" variable representing how far the tunnel has scrolled downwards. We'll spawn new segments at top (y = -segmentHeight maybe). Each frame we increment tunnelOffset by PLAYER_SPEED * dt; we draw segments relative to this offset.
+
+Define: const SEGMENT_HEIGHT = 30; // maybe gap distance between segments
+
+We need a spawn timer: spawnTimer variable, initial value random 1-3 seconds per design: "Every 1–3 seconds a new tunnel segment approaches". So spawn new segment when spawnTimer <= 0, reset to random between 1 and 3.
+
+We need to ensure initially no hazard spawns within SAFE_RADIUS (200) from player position. Since forward motion is moving forward from y start, spawn at y = -SAFE_RADIUS for first but avoid within safe radius. However easier: In reset we can set tunnelOffset = 0, spawnTimer to random 1-3. And when spawning segment, we can compute its y = -segmentHeight (so appears at top). The collision detection later may check.
+
+Safety: Ensure that first segment spawns after some distance > SAFE_RADIUS away from player. Since player is at y centered (canvas.height/2). We'll treat forward direction as moving up? Let's decide coordinate system: Let's have player fixed at y = canvas.height/2. Tunnel segments move downwards (increase y) and pass over the player. The first segment should start above the player so that they appear after some distance. We can set spawnY = -SEGMENT_HEIGHT (just above canvas). That's safe.
+
+But SAFE_RADIUS concept: maybe about distance from player (distance from obstacles). For now we can ensure not spawning too close by checking if segment's y + SEGMENT_HEIGHT + SAFE_RADIUS < 0? Eh.
+
+Simplify: Add variable tunnelY = 0; each frame tunnelY += PLAYER_SPEED * dt; we then render segments at their startY + tunnelY offset. Actually think: if we have segments initially at y = -nextSegmentOffset, moving downward at speed.
+
+Let's implement a simpler version:
+
+- Have an array 'segments' (instead of hazards) that hold objects { y: number, requiredRadius: number (small/large) }. The initial reset: segments = []; spawnTimer = 0; maybe set to random.
+
+- In startLoop tick, after clearing canvas and drawing player, we also update forward motion: We don't move player.y (maybe keep constant) but update segment positions: For each segment, segment.y += PLAYER_SPEED * dt.
+
+- Then we drop segments that have moved past bottom (y > canvas.height + SEGMENT_HEIGHT) by removing them.
+
+- Also we call spawn logic: decrement spawnTimer by dt; if spawnTimer <= 0, spawn new segment: randomly choose requiredRadius = Math.random() < 0.5 ? PLAYER_RADIUS_SMALL : PLAYER_RADIUS_LARGE; set segment.y = -SEGMENT_HEIGHT; Add to segments array. Reset spawnTimer to random(1,3) seconds.
+
+- The segment represents a "gap" placed at center horizontally? Actually we may need the gap position (size), but radius toggling is enough: no need for horizontal: collisions will use radius; but we may need to implement eventual collisions (maybe later tasks). For now we just spawn segments.
+
+But the spec in future tasks likely expects obstacles that the dot must have matching radius to pass; this will be used in collision detection. We'll need to store requiredRadius (size). Also store a property 'passed' to track scoring maybe later.
+
+Implement placeholder rendering: Draw rectangle (i.e., the tunnel walls) leaving a gap: gap width = requiredRadius*2 (diameter). For now we can draw two rectangles, left wall from x=0 to x = (canvas.width/2) - requiredRadius, unknown; but we can center the gap at canvas width/2. Let's compute gapCenterX = canvas.width/2 (center). Then leftWall width = gapCenterX - requiredRadius; rightWall width = canvas.width - (gapCenterX + requiredRadius). Then draw left and right walls at segment's y to segment.y + SEGMENT_HEIGHT.
+
+Implement drawing in startLoop tick: after clearing canvas and drawing player, draw each segment:
+
+```
+segments.forEach(seg => {
+  const gapRadius = seg.requiredRadius;
+  const gapCenterX = canvas.width/2;
+  const leftX = 0;
+  const leftW = gapCenterX - gapRadius;
+  const rightX = gapCenterX + gapRadius;
+  const rightW = canvas.width - rightX;
+  ctx.fillStyle = "#7df9ff"; // example color for tunnel walls maybe bright
+  ctx.fillRect(leftX, seg.y, leftW, SEGMENT_HEIGHT);
+  ctx.fillRect(rightX, seg.y, rightW, SEGMENT_HEIGHT);
+});
+```
+
+Spacing: Take color for walls maybe #1d1d2a? Use a neon accent.
+
+Segment height maybe 40.
+
+Add constants: const SEGMENT_HEIGHT = 30; const SEGMENT_SPEED = PLAYER_SPEED; (since they just move with player).
+
+Also need to update 'hazards' array maybe already used. We can rename hazards to segments. But code defines hazards variable; we can use hazards for segments. Let's keep using hazards variable to store segments (as earlier). At this stage, hazards[] will be used for obstacles. So we'll adapt that.
+
+Thus we need to incorporate forward motion and spawning in the loop.
+
+Implementation location: The 'startLoop' function currently just draws the player placeholder and publishes state, but now we need to modify it:
+
+- Remove placeholder clearing etc? Already clearing canvas each frame.
+
+- Add update logic: increment each hazard's y position by PLAYER_SPEED * dt; handle spawn timer; spawn new hazard; remove off-screen hazards.
+
+- Also update scoring/hits later.
+
+Thus we must edit startLoop function accordingly.
+
+Currently the startLoop tick is:
+
+```
+function tick(now) {
+  try {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+    // Clear canvas each frame
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Basic render placeholder: draw player dot
+    ctx.fillStyle = "#7df9ff";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+    ctx.fill();
+    // Publish observable state each frame
+    publishState();
+  } catch (err) {
+    console.error("loop error", err);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+```
+
+We need to add hazard movement and spawn inside try:
+
+- Update hazard positions: `hazards.forEach(h => h.y += PLAYER_SPEED * dt);`
+
+- Remove those off-screen: hazards = hazards.filter(h => h.y < canvas.height + SEGMENT_HEIGHT);
+
+- Decrement spawnTimer: spawnTimer -= dt; if spawnTimer <= 0, spawn.
+
+spawnTimer variable should be defined in STATE section as part of game state. Right now we have no spawnTimer variable. We'll need to add it. In the STATE section we have let player, hazards, score, phase, lastTime. Add let spawnTimer = 0; maybe also let segmentHeight constant defined in CONFIG.
+
+Add constant:
+
+```
+const SEGMENT_HEIGHT = 30;
+```
+
+Add in CONFIG.
+
+Define spawn timer logic:
+
+```
+function spawnSegment() {
+  const requiredRadius = Math.random() < 0.5 ? PLAYER_RADIUS_SMALL : PLAYER_RADIUS_LARGE;
+  hazards.push({ y: -SEGMENT_HEIGHT, requiredRadius });
+}
+```
+
+Reset: Initialize spawnTimer to random between 1-3 seconds. So in reset() after setting player etc., set spawnTimer = randomBetween(1, 3). Define a helper randomBetween.
+
+Add near constants: function rand(min, max) { return Math.random() * (max - min) + min; }
+
+We might want to put this helper in the CONFIG section.
+
+Thus we need to edit:
+
+- Add constants: SEGMENT_HEIGHT, maybe TUNNEL_SPEED? Already have PLAYER_SPEED. Use that.
+
+- In STATE: add spawnTimer variable: let spawnTimer = 0; maybe also segmentHeight constant already available.
+
+- In reset: set spawnTimer = rand(1, 3); Also maybe remove existing hazards.
+
+- In startLoop tick: update spawnTimer, spawn segments.
+
+- Also render segments before/after player? We'll draw them behind the player (walls). In typical design, we might draw tunnel walls first then player on top. So in tick:
+
+Clear canvas, draw segments (walls) with some color, then draw player dot.
+
+Implement rendering with ctx.fillStyle = "#7df9ff" for walls perhaps. Use a different color: "#1d1d2a"? Actually the style for walls may be background color? But we can use #1d1d2a maybe as dark. But as long they are rendered, it's fine.
+
+Simplify: Use same neon color for now.
+
+Also we need to implement toggle radius: Already done.
+
+Now implement updates to observable contract: player.visible same always true as player always in view; new state is phase which is currently "playing" after reset. That's fine.
+
+We need to ensure that startLoop tick after resetting will be called.
+
+Now after editing startLoop and adding constants/spawnTimer changes, ensure we don't break existing functions.
+
+Implementation steps:
+
+1. Edit CONFIG block: add SEGMENT_HEIGHT constant, maybe also GAP constants? Already have them. Add maybe TUNNEL_SPEED? Not needed. PLAYER_SPEED is forward speed.
+
+Add random helper: define function rnd(min, max) { return Math.random() * (max - min) + min; } maybe we can add in CONFIG after constants.
+
+2. Edit STATE block: add spawnTimer variable.
+
+3. Edit RESET: set spawnTimer = rnd(1,3); perhaps use function rnd.
+
+4. Edit startLoop tick: inside try, do:
+
+- dt computed.
+
+- // Update hazards/tunnel segments
+- hazards.forEach(h => h.y += PLAYER_SPEED * dt);
+- // Remove off-screen
+- hazards = hazards.filter(h => h.y < canvas.height + SEGMENT_HEIGHT);
+- // Update spawn timer
+- spawnTimer -= dt;
+- if (spawnTimer <= 0) { spawnSegment(); spawnTimer = rnd(1,3); }
+
+- After updates, render segments:
+
+```
+hazards.forEach(seg => {
+  const gapRadius = seg.requiredRadius;
+  const gapCenterX = canvas.width/2;
+  const leftX = 0;
+  const leftW = gapCenterX - gapRadius;
+  const rightX = gapCenterX + gapRadius;
+  const rightW = canvas.width - rightX;
+  ctx.fillStyle = "#1d1d2a"; // dark walls maybe
+  ctx.fillRect(leftX, seg.y, leftW, SEGMENT_HEIGHT);
+  ctx.fillRect(rightX, seg.y, rightW, SEGMENT_HEIGHT);
+});
+```
+
+- Then draw player.
+
+Alternative: we may need to draw player after segments to be on top.
+
+- Then publishState.
+
+Also include the random helper function definitions somewhere. Could put in CONFIG after constants.
+
+Also implement spawnSegment function maybe create new function, but we can inline.
+
+Implementing these changes with edits.
+
+We also must consider that we already added a constant PLAYER_SPEED in the CONFIG block earlier. Good.
+
+Now modifications in index.html will be done with edit tool.
+
+Important: Ensure we correctly locate blocks (CONFIG, STATE, etc.) to edit them.
+
+We'll run read again to confirm sections lines.
+
+Now proceed to edit.
+
+{"filePath":"/tmp/slop-factory-work/scale-shift-2-362848af/index.html","oldString":"    // Game constants\n    const PLAYER_RADIUS_SMALL = 5;\n    const PLAYER_RADIUS_LARGE = 12;\n    const SAFE_RADIUS = 200;\n    const GAP_SMALL = PLAYER_RADIUS_SMALL; // gap size for small radius\n    const GAP_LARGE = PLAYER_RADIUS_LARGE; // gap size for large radius\n    const PLAYER_SPEED = 200; // forward speed in px/sec","newString":"    // Game constants\n    const PLAYER_RADIUS_SMALL = 5;\n    const PLAYER_RADIUS_LARGE = 12;\n    const SAFE_RADIUS = 200;\n    const GAP_SMALL = PLAYER_RADIUS_SMALL; // gap size for small radius\n    const GAP_LARGE = PLAYER_RADIUS_LARGE; // gap size for large radius\n    const PLAYER_SPEED = 200; // forward speed in px/sec\n    const SEGMENT_HEIGHT = 30; // height of each tunnel segment\n    // Helper to get random float in [min, max)\n    function rnd(min, max) { return Math.random() * (max - min) + min; }"}
+
+---
+
