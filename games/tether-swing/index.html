@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tether Swing</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem; text-align:center; }
+    .game-header h1 { margin:0; font-size:1.5rem; }
+    .game-header p { margin:0.2rem 0 0.5rem; font-size:1rem; }
+    .game-controls { list-style:none; padding:0; margin:0; display:flex; justify-content:center; gap:1rem; font-size:0.9rem; }
+    #restart { position:absolute; top:0.5rem; right:0.5rem; padding:0.3rem 0.6rem; background:#7df9ff; border:none; color:#000; cursor:pointer; }
+    canvas { display:block; margin:auto; background:#111; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Tether Swing</h1>
+    <p class="game-description">A dot auto‑advances; tap to fire a temporary tether to a fixed point ahead, swing around it and launch over obstacles, then release to detach and continue forward.</p>
+    <ul class="game-controls">
+      <li>Tap / Click to fire or release tether</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----------- Game State ------------
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+    const SAFE_RADIUS = 200; // px, first 3‑sec safety zone
+    const GRAVITY = 0; // no vertical gravity for this mechanic
+    const PLAYER_RADIUS = 10;
+    const TETHER_LENGTH = 120; // max length when attached
+    const TETHER_SPEED = 400; // speed of dot when swinging
+    const AUTO_SPEED = 200; // forward speed when not swinging
+    const OBSTACLE_SPEED = 150; // leftward speed relative to player
+    const SPAWN_INTERVAL = 1.5; // seconds
+
+    let loopId = null;
+    let lastTime = performance.now();
+    let audioCtx = null; // lazy init
+
+    // observable contract
+    window.__game = {
+      state: 'menu',
+      score: 0,
+      player: { x: canvas.width/2, y: canvas.height/2, visible: true },
+      objective: 'Swing from tether to avoid obstacles and survive as long as possible.'
+    };
+
+    const player = { x: canvas.width/2, y: canvas.height/2, vx: AUTO_SPEED, vy: 0, tethered: false, angle: 0 };
+    const obstacles = [];
+    let spawnTimer = SPAWN_INTERVAL;
+    let tetherPoint = null; // {x,y}
+    let scoreTimer = 0;
+
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      player.x = canvas.width/2; player.y = canvas.height/2; player.vx = AUTO_SPEED; player.vy = 0; player.tethered = false; tetherPoint = null;
+      obstacles.length = 0; spawnTimer = SPAWN_INTERVAL; scoreTimer = 0; window.__game.score = 0; window.__game.state = 'playing';
+      loopId = requestAnimationFrame(loop);
+    }
+
+    restartBtn.addEventListener('click', resetGame);
+    document.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') resetGame(); });
+    canvas.addEventListener('pointerdown', () => {
+      if (!audioCtx) { try { audioCtx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e) {} }
+      if (!player.tethered) {
+        // fire tether ahead of current position
+        tetherPoint = { x: player.x + 150, y: player.y };
+        player.tethered = true;
+        // set angle for circular motion start
+        const dx = player.x - tetherPoint.x;
+        const dy = player.y - tetherPoint.y;
+        player.angle = Math.atan2(dy, dx);
+      } else {
+        // release tether
+        player.tethered = false; tetherPoint = null;
+      }
+    });
+
+    function spawnObstacle() {
+      const y = Math.random() * (canvas.height - 40) + 20;
+      // spawn off‑screen right, avoid safe radius at start
+      const x = canvas.width + 30;
+      obstacles.push({ x, y, w: 20, h: 20 });
+    }
+
+    function update(dt) {
+      // player forward motion when not tethered
+      if (!player.tethered) {
+        player.x += player.vx * dt;
+      } else {
+        // simple circular swing around tether point
+        const angularSpeed = TETHER_SPEED / TETHER_LENGTH; // rad/s
+        player.angle += angularSpeed * dt;
+        player.x = tetherPoint.x + TETHER_LENGTH * Math.cos(player.angle);
+        player.y = tetherPoint.y + TETHER_LENGTH * Math.sin(player.angle);
+      }
+
+      // move obstacles leftwards relative to player forward speed
+      for (const o of obstacles) {
+        o.x -= (OBSTACLE_SPEED + AUTO_SPEED) * dt;
+      }
+      // remove off‑screen obstacles
+      while (obstacles.length && obstacles[0].x + obstacles[0].w < 0) obstacles.shift();
+
+      // spawning
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnObstacle();
+        spawnTimer = SPAWN_INTERVAL;
+      }
+
+      // collision detection (simple AABB vs circle)
+      for (const o of obstacles) {
+        const dx = player.x - Math.max(o.x, Math.min(player.x, o.x + o.w));
+        const dy = player.y - Math.max(o.y, Math.min(player.y, o.y + o.h));
+        if (dx*dx + dy*dy < PLAYER_RADIUS*PLAYER_RADIUS) {
+          window.__game.state = 'gameover';
+        }
+      }
+
+      // score increment per second
+      scoreTimer += dt;
+      if (scoreTimer >= 1) {
+        window.__game.score += Math.floor(scoreTimer);
+        scoreTimer %= 1;
+      }
+
+      // keep player visible flag
+      window.__game.player.visible = true;
+    }
+
+    function draw() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // draw player
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath(); ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2); ctx.fill();
+
+      // draw tether if active
+      if (player.tethered && tetherPoint) {
+        ctx.strokeStyle = '#ff00aa';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(tetherPoint.x, tetherPoint.y); ctx.stroke();
+        // draw anchor point
+        ctx.fillStyle = '#ffd23f';
+        ctx.beginPath(); ctx.arc(tetherPoint.x, tetherPoint.y, 5,0,Math.PI*2); ctx.fill();
+      }
+
+      // draw obstacles
+      ctx.fillStyle = '#ff5555';
+      for (const o of obstacles) {
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+      }
+
+      // UI: score
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: '+window.__game.score, 10, 30);
+
+      // game over overlay
+      if (window.__game.state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: '+window.__game.score, canvas.width/2, canvas.height/2 + 20);
+        ctx.fillText('Press R or click Restart', canvas.width/2, canvas.height/2 + 60);
+      }
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime)/1000, 0.1);
+      lastTime = now;
+      try {
+        if (window.__game.state !== 'gameover') update(dt);
+        draw();
+      } catch(e) {
+        console.error(e);
+      }
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // start automatically
+    window.__game.state = 'playing';
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
