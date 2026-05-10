@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Speed Switch</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; }
+    .game-header { padding:10px; text-align:center; }
+    .game-header h1 { margin:0; font-size:2rem; }
+    .game-header p { margin:5px 0; }
+    .game-controls { list-style:none; padding:0; margin:0; display:inline-block; text-align:left; }
+    .game-controls li { margin:2px 0; }
+    canvas { display:block; margin:0 auto; background:#111; }
+    .game-restart { position:absolute; top:10px; right:10px; padding:5px 10px; background:#7df9ff; color:#000; border:none; cursor:pointer; }
+    .game-restart:hover { background:#ff00aa; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Speed Switch</h1>
+    <p class="game-description">Toggle the dot's speed to match gate requirements and survive as long as possible.</p>
+    <ul class="game-controls">
+      <li>Space bar or mouse click to toggle speed</li>
+      <li>Press R or click Restart to restart the game</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Configuration -----
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+    const PLAYER_RADIUS = 10;
+    const SLOW = 150; // px/s
+    const FAST = 300; // px/s
+    const GATE_WIDTH = 30;
+    const GATE_GAP = 120; // vertical gap size
+    const GATE_SPAWN_X = 850; // just right of canvas
+    const GATE_INTERVAL = 2.0; // seconds
+
+    // ----- State -----
+    let player, gates, spawnTimer, loopId = null, lastTime;
+    const objective = "Toggle speed to pass gates that require that speed.";
+
+    function initState() {
+      player = {
+        x: 100,
+        y: 300,
+        speed: SLOW,
+        radius: PLAYER_RADIUS,
+        visible: true,
+      };
+      gates = [];
+      spawnTimer = GATE_INTERVAL; // first gate after 2 seconds
+      window.__game = {
+        state: "playing",
+        score: 0,
+        player: { x: player.x, y: player.y, visible: true },
+        objective: objective,
+      };
+    }
+
+    // ----- Utility -----
+    function randomSpeed() { return Math.random() < 0.5 ? SLOW : FAST; }
+    function spawnGate() {
+      gates.push({
+        x: GATE_SPAWN_X,
+        requiredSpeed: randomSpeed(),
+        passed: false,
+      });
+    }
+
+    function resetGame() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      initState();
+      startLoop();
+    }
+
+    // ----- Input -----
+    function toggleSpeed() {
+      player.speed = player.speed === SLOW ? FAST : SLOW;
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleSpeed();
+      } else if (e.code === 'KeyR') {
+        resetGame();
+      }
+    });
+    document.getElementById('restart').addEventListener('click', resetGame);
+    document.getElementById('game').addEventListener('pointerdown', (e) => {
+      // ignore clicks on UI elements
+      if (e.target.id === 'restart') return;
+      toggleSpeed();
+    });
+
+    // ----- Rendering -----
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    function draw() {
+      // clear
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // draw player
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // draw gates
+      gates.forEach(g => {
+        // wall background
+        ctx.fillStyle = '#ff00aa';
+        ctx.fillRect(g.x, 0, GATE_WIDTH, CANVAS_H);
+        // opening – only visible if speeds match
+        if (player.speed === g.requiredSpeed) {
+          ctx.clearRect(g.x, player.y - GATE_GAP/2, GATE_WIDTH, GATE_GAP);
+        }
+      });
+
+      // draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: ' + window.__game.score, 10, 30);
+    }
+
+    // ----- Game Loop -----
+    function loop(now) {
+      try {
+        const dt = Math.min((now - (lastTime || now)) / 1000, 0.1);
+        lastTime = now;
+        if (window.__game.state !== 'playing') {
+          // draw game over overlay if needed
+          draw();
+          if (window.__game.state === 'gameover') {
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+            ctx.fillStyle = '#fff';
+            ctx.font = '40px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 20);
+            ctx.font = '20px sans-serif';
+            ctx.fillText('Score: ' + window.__game.score, CANVAS_W/2, CANVAS_H/2 + 20);
+            ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 50);
+            ctx.textAlign = 'left';
+          }
+          loopId = requestAnimationFrame(loop);
+          return;
+        }
+
+        // update player
+        player.x += player.speed * dt;
+        // update timers
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnGate();
+          spawnTimer += GATE_INTERVAL;
+        }
+        // check gates
+        for (let i = gates.length - 1; i >= 0; i--) {
+          const g = gates[i];
+          if (!g.passed && player.x >= g.x) {
+            if (player.speed === g.requiredSpeed) {
+              // passed safely
+              window.__game.score += 1;
+              g.passed = true;
+            } else {
+              // collision -> game over
+              window.__game.state = 'gameover';
+            }
+            // remove gate after handling
+            gates.splice(i, 1);
+          }
+        }
+        // update observable state
+        window.__game.player.x = player.x;
+        window.__game.player.y = player.y;
+        window.__game.player.visible = true;
+        // render
+        draw();
+      } catch (e) {
+        console.error('Game loop error:', e);
+      }
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      lastTime = null;
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // ----- Start -----
+    initState();
+    startLoop();
+  </script>
+</body>
+</html>
