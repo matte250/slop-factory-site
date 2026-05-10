@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+/* === CRITIQUE ANALYSIS — preserve through polish ===
+   Step 1: Simulated first 3 seconds with no input. Player stays at (400,300), hazards spawn at x=1800 and move left. No collision occurs because player fragment (0) does not match vertical band (middle). Verdict: PASS – player does not die prematurely.
+   Step 2: Controls:
+     - Arrow Up / W: modifies player.y (vertical position) → affects collision detection.
+     - Arrow Down / S: modifies player.y → affects collision detection.
+     - Space / Click / Tap: cycles player.fragment → directly determines which layer is solid, crucial for both collision and scoring.
+     - R / Restart button: calls reset() → resets all mutable state and restarts the game loop.
+     All controls have gameplay impact. PASS.
+   Step 3:
+     1. Player can lose via collision or leaving canvas. PASS.
+     2. Score increases only when a hazard passes the player (discrete event). PASS.
+     3. Game‑over overlay draws final score. PASS.
+     4. R key and Restart button both invoke reset(). PASS.
+     5. reset() → startLoop() cancels any existing loop before starting a new one. PASS.
+     6. All movement and timers are scaled by dt. PASS.
+     7. Death overlay gives visual feedback, but scoring had no feedback. FAIL.
+     8. Mechanic matches concept – fragment cycling determines survivability. PASS.
+     9. Implementation follows DESIGN.md: spawn position, interval, speed, gap generation, safe radius usage, and first‑3‑seconds simulation are consistent. PASS.
+   Step 4: Fixes applied:
+     - Added immediate hazard spawn in reset() to satisfy safe‑radius guarantee.
+     - Introduced scoreFlash timer and visual flash on score increment.
+   === END CRITIQUE === */
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fragment Shift</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; image-rendering: pixelated; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Fragment Shift</h1>
+    <p class="game-description">Control a three‑layered dot that cycles its solid fragment to thread through moving layered barriers. Survive as long as possible, scoring each barrier you pass.</p>
+    <ul class="game-controls">
+      <li>Arrow Up / W – move up</li>
+      <li>Arrow Down / S – move down</li>
+      <li>Space / Click / Tap – cycle fragment</li>
+      <li>Press R or click Restart – restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const CANVAS_W = 800;
+  const CANVAS_H = 600;
+  const PLAYER_RADIUS = 15;
+  const PLAYER_SPEED = 200; // px/s vertical
+  const FRAGMENTS = 3;
+  const HAZARD_SPEED = 250; // px/s leftward
+  const SPAWN_INTERVAL = 2.0; // seconds
+  const HAZARD_WIDTH = 30;
+  const GAP_HEIGHT = 60;
+  const LAYER_HEIGHT = CANVAS_H / FRAGMENTS; // 200
+  const SAFE_RADIUS = 200;
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  // mutable state, plain object literals
+  let player;
+let scoreFlash = 0; // seconds remaining for score flash
+  let hazards; // array of { x, gaps: [yTop, yMid, yBot] }
+  let spawnTimer;
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+  const keys = new Set();
+
+  // === RESET ==============================================================
+function reset() {
+    // Reset player and state
+    player = {
+      x: CANVAS_W / 2,
+      y: CANVAS_H / 2,
+      fragment: 0,
+      radius: PLAYER_RADIUS,
+      score: 0,
+      lives: 3,
+      visible: true,
+    };
+    hazards = [];
+    // Immediately spawn a hazard so the first one is outside SAFE_RADIUS
+    spawnHazard();
+    spawnTimer = SPAWN_INTERVAL; // time until next spawn
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP ===============================================================
+  let gameActive = false;
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    gameActive = true;
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error('loop error', err);
+      }
+      if (gameActive) {
+        loopId = requestAnimationFrame(tick);
+      }
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+  // decrement score flash timer
+  if (scoreFlash > 0) scoreFlash -= dt;
+    // player input
+    if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) {
+      player.y -= PLAYER_SPEED * dt;
+    }
+    if (keys.has('ArrowDown') || keys.has('s') || keys.has('S')) {
+      player.y += PLAYER_SPEED * dt;
+    }
+    // keep within vertical bounds for visibility check
+    if (player.y < 0 || player.y > CANVAS_H) {
+      gameOver();
+    }
+
+    // hazards movement & spawn
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnHazard();
+      spawnTimer = SPAWN_INTERVAL;
+    }
+    for (let i = hazards.length - 1; i >= 0; i--) {
+      const h = hazards[i];
+      h.x -= HAZARD_SPEED * dt;
+      // collision check
+      if (h.x < player.x + player.radius && h.x + HAZARD_WIDTH > player.x - player.radius) {
+        const layerIdx = player.fragment; // 0 top,1 mid,2 bot
+        const layerY = layerIdx * LAYER_HEIGHT;
+        const gapY = h.gaps[layerIdx];
+        const inBand = player.y >= layerY && player.y <= layerY + LAYER_HEIGHT;
+        const inGap = player.y >= gapY && player.y <= gapY + GAP_HEIGHT;
+        if (inBand && !inGap) {
+          gameOver();
+        }
+      }
+      // scoring when passed
+      if (h.x + HAZARD_WIDTH < player.x && !h.scored) {
+        player.score++;
+          scoreFlash = 0.2; // flash duration seconds
+        h.scored = true;
+        beep(440, 0.08);
+      }
+      // remove off‑screen hazards
+      if (h.x + HAZARD_WIDTH < 0) {
+        hazards.splice(i, 1);
+      }
+    }
+  }
+
+  function spawnHazard() {
+    // generate gap Y for each layer, centered randomly within that layer's band
+    const gaps = [];
+    for (let i = 0; i < FRAGMENTS; i++) {
+      const bandStart = i * LAYER_HEIGHT;
+      const maxStart = bandStart + LAYER_HEIGHT - GAP_HEIGHT;
+      const gapY = bandStart + Math.random() * (maxStart - bandStart);
+      gaps.push(gapY);
+    }
+    hazards.push({ x: CANVAS_W + 1000, gaps, scored: false });
+  }
+
+  function gameOver() {
+    player.lives = 0;
+    gameActive = false;
+    loopId && cancelAnimationFrame(loopId);
+    // expose state as gameover
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    // clear
+    ctx.fillStyle = '#0f1320';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // draw hazards
+    ctx.fillStyle = '#ff00aa';
+    hazards.forEach(h => {
+      for (let i = 0; i < FRAGMENTS; i++) {
+        const bandY = i * LAYER_HEIGHT;
+        const gapY = h.gaps[i];
+        // top solid part
+        ctx.fillRect(h.x, bandY, HAZARD_WIDTH, gapY - bandY);
+        // bottom solid part
+        ctx.fillRect(h.x, gapY + GAP_HEIGHT, HAZARD_WIDTH, bandY + LAYER_HEIGHT - (gapY + GAP_HEIGHT));
+      }
+    });
+
+    // draw player (only solid fragment visible)
+    const colors = ['#7df9ff', '#ff00aa', '#ffd23f']; // top,middle,bottom colors
+    ctx.fillStyle = scoreFlash > 0 ? '#ffffff' : colors[player.fragment];
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText('Score ' + player.score, 12, 22);
+    ctx.textAlign = 'right';
+    ctx.fillText('Lives ' + player.lives, CANVAS_W - 12, 22);
+
+    // game over overlay
+    if (player.lives <= 0) {
+      ctx.fillStyle = 'rgba(10,10,15,0.7)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.fillStyle = '#ff00aa';
+      ctx.textAlign = 'center';
+      ctx.font = '44px ui-sans-serif, system-ui';
+      ctx.fillText('Game Over', CANVAS_W / 2, CANVAS_H / 2 - 20);
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '20px ui-sans-serif, system-ui';
+      ctx.fillText('Final score ' + player.score, CANVAS_W / 2, CANVAS_H / 2 + 16);
+      ctx.fillStyle = '#a5a5b8';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.fillText('Press R or click Restart', CANVAS_W / 2, CANVAS_H / 2 + 44);
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+    if (ev.key === ' ' || ev.key === 'Spacebar') {
+      player.fragment = (player.fragment + 1) % FRAGMENTS;
+      beep(660, 0.06);
+    }
+  });
+  document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+  canvas.addEventListener('mousedown', (ev) => {
+    // cycle fragment on click/tap
+    player.fragment = (player.fragment + 1) % FRAGMENTS;
+    beep(660, 0.06);
+  });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    const stateStr = player.lives <= 0 ? 'gameover' : 'playing';
+    const visible = player.x >= 0 && player.x <= CANVAS_W && player.y >= 0 && player.y <= CANVAS_H;
+    window.__game = {
+      state: stateStr,
+      score: player.score,
+      player: {
+        x: player.x,
+        y: player.y,
+        visible,
+      },
+      objective: 'Cycle your solid fragment to pass through layered barriers.',
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
