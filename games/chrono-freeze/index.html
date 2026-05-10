@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chrono Freeze</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#e6e6f0; font-family:ui-sans-serif,system-ui,sans-serif; }
+    .game-header { padding:12px 16px; border-bottom:1px solid #1d1d2a; }
+    .game-header h1 { margin:0; font-size:18px; color:#7df9ff; }
+    .game-header .game-description { margin:4px 0; color:#a5a5b8; }
+    .game-header .game-controls { margin:4px 0; padding-left:18px; color:#c8c8d8; }
+    main { display:flex; flex-direction:column; align-items:center; padding:16px; }
+    canvas { background:#0f1320; border:1px solid #2a2f44; image-rendering:pixelated; }
+    .game-restart { margin-top:10px; padding:8px 14px; background:#1c2030; color:#7df9ff; border:1px solid #2a2f44; cursor:pointer; }
+    .game-restart:hover { background:#232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Chrono Freeze</h1>
+    <p class="game-description">Tap to emit a short‑lived bubble that freezes all nearby moving obstacles; time the freezes to slip through tight, scrolling gaps while the tunnel scrolls.</p>
+    <ul class="game-controls">
+      <li>Arrow keys or WASD to move up/down</li>
+      <li>Space or mouse click to emit freeze bubble</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const CANVAS_W = 800;
+  const CANVAS_H = 600;
+  const PLAYER_W = 30;
+  const PLAYER_H = 30;
+  const PLAYER_X = 80; // fixed horizontal position
+  const PLAYER_SPEED = 300; // px/s
+  const OBSTACLE_W = 40;
+  const GAP_MIN = 120;
+  const GAP_MAX = 200;
+  const OBSTACLE_SPEED = 200; // px/s (when not frozen)
+  const SPAWN_INTERVAL = 1.5; // seconds between obstacles
+  const FREEZE_DURATION = 0.4; // seconds
+  const FREEZE_BUBBLE_R = 80;
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let player = { y: CANVAS_H/2, vy:0 };
+  let obstacles = [];
+  let spawnTimer = 0;
+  let freezeTimer = 0;
+  let score = 0;
+  let highScore = 0;
+  let phase = 'playing'; // 'playing' | 'gameover'
+  let lastTime = performance.now();
+  let loopId = null;
+  let audioCtx = null;
+  const keys = new Set();
+
+  // === RESET ==============================================================
+  function reset() {
+    player.y = CANVAS_H/2;
+    player.vy = 0;
+    obstacles = [];
+    spawnTimer = 0;
+    freezeTimer = 0;
+    score = 0;
+    phase = 'playing';
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP ==============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) {
+        console.error('loop error', e);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (phase !== 'playing') return;
+
+    // player input
+    if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) player.vy = -PLAYER_SPEED;
+    else if (keys.has('ArrowDown') || keys.has('s') || keys.has('S')) player.vy = PLAYER_SPEED;
+    else player.vy = 0;
+    player.y += player.vy * dt;
+    // clamp vertically
+    if (player.y < PLAYER_H/2) player.y = PLAYER_H/2;
+    if (player.y > CANVAS_H - PLAYER_H/2) player.y = CANVAS_H - PLAYER_H/2;
+
+    // freeze timer
+    if (freezeTimer > 0) {
+      freezeTimer -= dt;
+    }
+
+    // obstacle spawning
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnObstacle();
+      spawnTimer = SPAWN_INTERVAL;
+    }
+
+    // move obstacles
+    const speed = (freezeTimer > 0) ? 0 : OBSTACLE_SPEED;
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      o.x -= speed * dt;
+      // check passing player for score
+      if (!o.passed && o.x + OBSTACLE_W < PLAYER_X) {
+        o.passed = true;
+        score++;
+        if (score > highScore) highScore = score;
+        beep(880, 0.07);
+      }
+      // collision (if not frozen)
+      if (freezeTimer <= 0 && o.x < PLAYER_X + PLAYER_W && o.x + OBSTACLE_W > PLAYER_X) {
+        const gapTop = o.gapY;
+        const gapBottom = o.gapY + o.gapH;
+        const playerTop = player.y - PLAYER_H/2;
+        const playerBottom = player.y + PLAYER_H/2;
+        if (playerTop < gapTop || playerBottom > gapBottom) {
+          gameOver();
+        }
+      }
+      // remove off-screen
+      if (o.x + OBSTACLE_W < 0) obstacles.splice(i,1);
+    }
+  }
+
+  function spawnObstacle() {
+    // Gap position random within safe vertical range
+    const gapH = GAP_MIN + Math.random() * (GAP_MAX - GAP_MIN);
+    const gapY = gapH/2 + Math.random() * (CANVAS_H - gapH);
+    const obstacle = {
+      x: CANVAS_W,
+      gapY: gapY - gapH/2, // top of gap
+      gapH: gapH,
+      passed: false,
+    };
+    // safe spawn: ensure not colliding within 3 seconds at current speed
+    // Since obstacle starts at right edge, it will take (CANVAS_W + OBSTACLE_W)/OBSTACLE_SPEED seconds to reach player.
+    // This is >3 seconds, so no extra check needed.
+    obstacles.push(obstacle);
+  }
+
+  function gameOver() {
+    phase = 'gameover';
+    beep(220, 0.2);
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#0f1320';
+    ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+
+    // draw obstacles
+    ctx.fillStyle = '#ff00aa';
+    for (const o of obstacles) {
+      // top rect
+      ctx.fillRect(o.x,0,OBSTACLE_W,o.gapY);
+      // bottom rect
+      ctx.fillRect(o.x,o.gapY+o.gapH,OBSTACLE_W,CANVAS_H - (o.gapY+o.gapH));
+    }
+
+    // draw player
+    ctx.fillStyle = '#7df9ff';
+    ctx.fillRect(PLAYER_X, player.y - PLAYER_H/2, PLAYER_W, PLAYER_H);
+
+    // draw freeze bubble if active
+    if (freezeTimer > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(PLAYER_X + PLAYER_W/2, player.y, FREEZE_BUBBLE_R, 0, Math.PI*2);
+      ctx.stroke();
+    }
+
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif,system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText('Score ' + score, 12, 22);
+    ctx.textAlign = 'right';
+    ctx.fillText('Best ' + highScore, CANVAS_W - 12, 22);
+
+    if (phase === 'gameover') {
+      ctx.fillStyle = 'rgba(10,10,15,0.7)';
+      ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+      ctx.fillStyle = '#ff52ae';
+      ctx.textAlign = 'center';
+      ctx.font = '44px ui-sans-serif,system-ui';
+      ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 20);
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '20px ui-sans-serif,system-ui';
+      ctx.fillText('Final score ' + score, CANVAS_W/2, CANVAS_H/2 + 16);
+      ctx.fillStyle = '#a5a5b8';
+      ctx.font = '16px ui-sans-serif,system-ui';
+      ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 44);
+    }
+  }
+
+  // === INPUT =============================================================
+  document.addEventListener('keydown', (e) => {
+    const key = e.key;
+    if (key === 'r' || key === 'R') { reset(); return; }
+    if (phase !== 'playing') return;
+    keys.add(key);
+    if (key === ' ' ) triggerFreeze();
+  });
+  document.addEventListener('keyup', (e) => {
+    keys.delete(e.key);
+  });
+  canvas.addEventListener('click', (e) => {
+    if (phase !== 'playing') return;
+    triggerFreeze();
+  });
+  restartBtn.addEventListener('click', reset);
+
+  function triggerFreeze() {
+    if (freezeTimer > 0) return; // already active
+    freezeTimer = FREEZE_DURATION;
+    beep(660, 0.08);
+  }
+
+  // === AUDIO (lazy) ======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.07, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + durSec);
+    } catch (e) {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    const playerX = PLAYER_X + PLAYER_W/2;
+    const playerY = player.y;
+    const visible = playerX >= 0 && playerX <= CANVAS_W && playerY >=0 && playerY <= CANVAS_H;
+    window.__game = {
+      state: phase,
+      score: score,
+      player: { x: playerX, y: playerY, visible },
+      objective: 'Freeze obstacles to slip through gaps while the tunnel scrolls.'
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
