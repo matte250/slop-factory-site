@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Momentum Flip</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Momentum Flip</h1>
+    <p class="game-description">The dot constantly accelerates forward; each tap instantly reverses its velocity, letting you dodge incoming wall spikes.</p>
+    <ul class="game-controls">
+      <li>Tap / Click to flip velocity</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+// === CONFIG =============================================================
+const W = 800, H = 600;
+const SAFE_RADIUS = 200; // no hazard spawns within this radius of player at start
+const HAZARD_SPEED = 150; // px/sec
+const HAZARD_RADIUS = 6;
+
+// Audio system (lazy init)
+let audioCtx = null;
+function getAudioCtx(){
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioCtx;
+}
+function beep(freq, dur){
+  const ctx = getAudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  gain.gain.setValueAtTime(0.1, ctx.currentTime);
+  osc.start();
+  osc.stop(ctx.currentTime + dur);
+}
+    // === STATE =============================================================
+    const player = { x: W/2, y: H/2, vx: 0, vy: 0 };
+    const hazards = [];
+    let score = 0;
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+    const keys = new Set();
+    const objective = "Flip momentum to avoid spikes coming from the direction you travel.";
+    // === OBSERVABLE CONTRACT ===============================================
+function publishState() {
+  window.__game = {
+    state: phase,
+    score,
+    player: {
+      x: player.x,
+      y: player.y,
+      visible: phase !== 'gameover' // hide player on game over
+    },
+    objective
+  };
+}
+    // Initial publish before any rendering.
+    publishState();
+    // === CONFIG =============================================================
+    const ACCEL = 200; // px/sec^2
+    const MAX_SPEED = 400; // px/sec
+// Ensure canvas element is obtained early
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// === RENDER =============================================================
+function render() {
+  // background
+  ctx.fillStyle = '#05050c';
+  ctx.fillRect(0,0,W,H);
+
+  // draw hazards (high contrast red)
+  ctx.fillStyle = '#ff4d4d';
+  for (const h of hazards) {
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, HAZARD_RADIUS, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // draw player (high contrast cyan)
+  ctx.fillStyle = '#7df9ff';
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, 4, 0, Math.PI*2);
+  ctx.fill();
+
+  // HUD: score and phase
+  ctx.fillStyle = '#e6e6f0';
+  ctx.font = '16px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`Score: ${score}`, 10, 10);
+  ctx.fillText(`Phase: ${phase}`, 10, 30);
+
+  // Game Over overlay
+  if (phase === 'gameover') {
+    // dim background
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    // text
+    ctx.fillStyle = '#ff4d4d';
+    ctx.font = '48px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Game Over', W/2, H/2 - 30);
+    ctx.font = '24px sans-serif';
+    ctx.fillText(`Final Score: ${score}`, W/2, H/2 + 10);
+    ctx.fillText('Press R or click Restart', W/2, H/2 + 50);
+  }
+}
+
+// === UPDATE =============================================================
+function update(dt) {
+  // accelerate forward (increase speed magnitude)
+  const speed = Math.hypot(player.vx, player.vy);
+  const dir = speed === 0 ? {x: 1, y: 0} : {x: player.vx / speed, y: player.vy / speed};
+  // increase speed
+  let newSpeed = Math.min(speed + ACCEL * dt, MAX_SPEED);
+  player.vx = dir.x * newSpeed;
+  player.vy = dir.y * newSpeed;
+  // move
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  // clamp to bounds
+  if (player.x < 0) player.x = 0;
+  if (player.x > W) player.x = W;
+  if (player.y < 0) player.y = 0;
+  if (player.y > H) player.y = H;
+
+  // === COLLISION DETECTION =================================================
+  // Check collision with hazards; if any, end game
+  for (const h of hazards) {
+    const dx = player.x - h.x;
+    const dy = player.y - h.y;
+    const distSq = dx * dx + dy * dy;
+    const radSum = 4 + HAZARD_RADIUS; // player radius 4
+    if (distSq < radSum * radSum) {
+      phase = "gameover";
+      // Stop the game loop
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      break;
+    }
+  }
+}
+
+    // === LOOP =============================================================
+    let loopId = null;
+    let lastTime = performance.now();
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      phase = "playing";
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          // Update player movement
+    update(dt);
+    // placeholder other update logic could go here
+          render();
+          publishState();
+        } catch (err) {
+          console.error('loop error', err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    // === INPUT =============================================================
+    function reset() { location.reload(); }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        reset();
+        return;
+      }
+      keys.add(e.key);
+    });
+    document.addEventListener('keyup', (e) => { keys.delete(e.key); });
+    // Tap / click to flip velocity (placeholder, actual logic later)
+canvas.addEventListener('click', () => {
+    // Reverse velocity instantly
+    player.vx = -player.vx;
+    player.vy = -player.vy;
+    beep(400, 0.05); // flip sound
+  });
+    document.getElementById('restart').addEventListener('click', reset);
+    // === BOOT ===============================================================
+    startLoop();
+  </script>
+</body>
+</html>
