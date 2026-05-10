@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rail Rider</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:10px;background:#111;}
+    .game-header h1 {margin:0;font-size:1.5em;}
+    .game-header p {margin:0.5em 0;}
+    .game-controls {margin:0;padding:0;list-style:none;}
+    .game-restart {position:absolute;top:10px;right:10px;padding:5px 10px;background:#ff00aa;color:#000;border:none;cursor:pointer;}
+    canvas {display:block;background:#000;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Rail Rider</h1>
+    <p class="game-description">A dot auto‑clings to a moving rail that snakes across the screen; each tap jumps the dot to an adjacent parallel rail, letting you hop between rails to avoid gaps that appear in each path.</p>
+    <ul class="game-controls">
+      <li>Tap or click to switch rails</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Game constants -----
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+    const RAIL_COUNT = 3;
+    const RAIL_Y = [200, 300, 400]; // y positions for each rail
+    const PLAYER_X = 100; // fixed x coordinate of the dot
+    const PLAYER_RADIUS = 8;
+    const SCROLL_SPEED = 200; // px per second, world moves left
+    const GAP_WIDTH = 60;
+    const GAP_SPAWN_INTERVAL = 1.5; // seconds
+    const SAFE_RADIUS = 200; // per contract
+    const MAX_DT = 0.1; // clamp dt
+
+    // ----- Game state -----
+    let canvas, ctx;
+    let loopId = null;
+    let lastTime = performance.now();
+    let elapsed = 0;
+    let spawnTimer = GAP_SPAWN_INTERVAL;
+    let gaps = []; // {rail, x}
+    let playerRail = 1; // start middle rail
+    let score = 0;
+    let gameState = "menu"; // menu | playing | gameover
+    let audioCtx = null;
+
+    // expose state for validator
+    window.__game = {
+      state: gameState,
+      score: score,
+      player: {x: PLAYER_X, y: RAIL_Y[playerRail], visible: true},
+      objective: "Jump between moving rails to avoid gaps."
+    };
+
+    function init() {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      // Attach input listeners now that canvas is defined
+      canvas.addEventListener('click', switchRail);
+      canvas.addEventListener('touchstart', e => { e.preventDefault(); switchRail(); });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'r' || e.key === 'R') {
+          reset();
+        }
+      });
+      const restartBtn = document.getElementById('restart');
+      if (restartBtn) restartBtn.addEventListener('click', reset);
+      reset();
+    }
+
+    function reset() {
+      // cancel any prior loop
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset state
+      gaps = [];
+      spawnTimer = GAP_SPAWN_INTERVAL;
+      playerRail = 1;
+      score = 0;
+      elapsed = 0;
+      lastTime = performance.now();
+      gameState = "playing";
+      updateExpose();
+      startLoop();
+    }
+
+    function startLoop() {
+      function tick(now) {
+        const dt = Math.min((now - lastTime) / 1000, MAX_DT);
+        lastTime = now;
+        try {
+          update(dt);
+          render();
+        } catch (e) {
+          console.error('Loop error', e);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      if (gameState !== "playing") return;
+      elapsed += dt;
+      // move gaps leftwards
+      for (let g of gaps) {
+        g.x -= SCROLL_SPEED * dt;
+      }
+      // remove passed gaps and award score when player safely passes a gap on another rail
+      gaps = gaps.filter(g => {
+        if (g.x + GAP_WIDTH < 0) return false; // off screen left
+        // check collision when gap aligns with player x
+        if (g.x <= PLAYER_X && g.x + GAP_WIDTH >= PLAYER_X) {
+          if (g.rail === playerRail) {
+            // player is on a rail with a gap -> death
+            gameOver();
+            return false;
+          } else {
+            // survived a gap on another rail
+            score++;
+            updateExpose();
+          }
+        }
+        return true;
+      });
+      // spawn new gaps
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnGap();
+        spawnTimer = GAP_SPAWN_INTERVAL;
+      }
+    }
+
+    function spawnGap() {
+      // choose rail randomly
+      const rail = Math.floor(Math.random() * RAIL_COUNT);
+      // spawn x just beyond right edge
+      const spawnX = CANVAS_W + GAP_WIDTH;
+      // enforce safe radius rule: ensure gap won't reach player within 3 seconds
+      const timeToReach = (spawnX - PLAYER_X) / SCROLL_SPEED; // seconds to travel to player
+      if (timeToReach < 3 && Math.abs(RAIL_Y[rail] - RAIL_Y[playerRail]) < SAFE_RADIUS) {
+        // too close, skip this spawn
+        return;
+      }
+      gaps.push({rail, x: spawnX});
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      // draw rails (simple lines)
+      ctx.strokeStyle = '#7df9ff';
+      ctx.lineWidth = 4;
+      for (let i = 0; i < RAIL_COUNT; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, RAIL_Y[i]);
+        ctx.lineTo(CANVAS_W, RAIL_Y[i]);
+        ctx.stroke();
+      }
+      // draw gaps (as black rectangles covering rail)
+      ctx.fillStyle = '#0a0a0f';
+      for (let g of gaps) {
+        ctx.fillRect(g.x, RAIL_Y[g.rail] - 2, GAP_WIDTH, 4);
+      }
+      // draw player dot
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(PLAYER_X, RAIL_Y[playerRail], PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      // draw score
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + score, 10, 30);
+      if (gameState === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: ' + score, CANVAS_W/2, CANVAS_H/2 + 20);
+        ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 60);
+        ctx.textAlign = 'left';
+      }
+    }
+
+    function gameOver() {
+      gameState = 'gameover';
+      updateExpose();
+    }
+
+    function updateExpose() {
+      window.__game.state = gameState;
+      window.__game.score = score;
+      window.__game.player.x = PLAYER_X;
+      window.__game.player.y = RAIL_Y[playerRail];
+      window.__game.player.visible = true;
+    }
+
+    // ----- Input handling -----
+    function switchRail() {
+      // move to adjacent rail; if at edges, stay
+      if (playerRail < RAIL_COUNT - 1) {
+        playerRail++;
+      } else {
+        playerRail = 0;
+      }
+      updateExpose();
+    }
+    // Event listeners will be attached after DOM is loaded in init()
+
+    // ----- Start -----
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>
