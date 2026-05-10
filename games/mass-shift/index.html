@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mass Shift</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:Arial,Helvetica,sans-serif; }
+    .game-header { padding:10px; text-align:center; }
+    .game-header h1 { margin:0; font-size:2em; }
+    .game-header p { margin:5px 0; }
+    .game-controls { list-style:none; padding:0; display:flex; justify-content:center; gap:10px; }
+    .game-restart { margin-top:10px; padding:5px 10px; font-size:1em; cursor:pointer; }
+    canvas { display:block; margin:0 auto; background:#111; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Mass Shift</h1>
+    <p class="game-description">The dot auto‑advances; each tap adds mass making it larger and able to smash through breakable walls, while holding releases mass to shrink for tight gaps, forcing you to balance power and size.</p>
+    <ul class="game-controls">
+      <li>Click to grow</li>
+      <li>Hold click to shrink</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const restartBtn = document.getElementById('restart');
+      const SAFE_RADIUS = 200;
+      let loopId = null;
+      const state = {
+        state: 'menu',
+        score: 0,
+        player: { x: 100, y: canvas.height/2, visible: true },
+        objective: 'Grow, smash walls, and survive as long as possible.'
+      };
+      window.__game = state;
+
+      const player = {
+        x: canvas.width * 0.1,
+        y: canvas.height/2,
+        radius: 15,
+        speed: 120, // px per second
+        growing: false,
+        shrinking: false
+      };
+
+      const obstacles = [];
+      let spawnTimer = 0;
+
+      function reset() {
+        if (loopId !== null) cancelAnimationFrame(loopId);
+        player.x = canvas.width * 0.1;
+        player.y = canvas.height/2;
+        player.radius = 15;
+        player.growing = false;
+        player.shrinking = false;
+        obstacles.length = 0;
+        spawnTimer = 0;
+        state.score = 0;
+        state.state = 'playing';
+        state.player.x = player.x;
+        state.player.y = player.y;
+        state.player.visible = true;
+        lastTime = performance.now();
+        startLoop();
+      }
+
+      function startLoop() {
+        function loop(now) {
+          try {
+            const dt = Math.min((now - lastTime) / 1000, 0.1);
+            lastTime = now;
+            update(dt);
+            render();
+            loopId = requestAnimationFrame(loop);
+          } catch (e) {
+            console.error('Loop error', e);
+          }
+        }
+        loopId = requestAnimationFrame(loop);
+      }
+
+      let lastTime = performance.now();
+
+      function update(dt) {
+        if (state.state !== 'playing') return;
+        // player auto‑advance
+        player.x += player.speed * dt;
+        // growth / shrink
+        if (player.growing) {
+          player.radius = Math.min(player.radius + 40 * dt, 80);
+        } else if (player.shrinking) {
+          player.radius = Math.max(player.radius - 60 * dt, 10);
+        }
+        // keep player within canvas vertically
+        if (player.y < player.radius) player.y = player.radius;
+        if (player.y > canvas.height - player.radius) player.y = canvas.height - player.radius;
+        // spawn obstacles
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnObstacle();
+          spawnTimer = 1.5 + Math.random(); // seconds
+        }
+        // update obstacles
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          const o = obstacles[i];
+          o.x -= o.speed * dt;
+          // collision check
+          const dx = o.x - player.x;
+          const dy = o.y - player.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < o.size/2 + player.radius) {
+            if (player.radius >= o.requiredRadius) {
+              // smash wall, increase score
+              state.score += 10;
+              obstacles.splice(i, 1);
+            } else {
+              // game over
+              state.state = 'gameover';
+            }
+          } else if (o.x + o.size < 0) {
+            obstacles.splice(i, 1);
+          }
+        }
+        // update observable
+        state.player.x = player.x;
+        state.player.y = player.y;
+        state.player.visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+      }
+
+      function spawnObstacle() {
+        const size = 30 + Math.random() * 30;
+        const requiredRadius = size * 0.8; // need to be big enough to smash
+        const y = size/2 + Math.random() * (canvas.height - size);
+        const x = canvas.width + size;
+        const speed = 80 + Math.random() * 40;
+        // safe‑spawn rule
+        const startDist = Math.hypot(x - player.x, y - player.y);
+        const timeToReach = startDist / speed;
+        if (startDist < SAFE_RADIUS && timeToReach < 3) {
+          // skip this spawn, try later
+          spawnTimer = 0.5; // try again soon
+          return;
+        }
+        obstacles.push({ x, y, size, speed, requiredRadius });
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // draw player
+        ctx.fillStyle = '#7df9ff';
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2);
+        ctx.fill();
+        // draw obstacles
+        ctx.fillStyle = '#ff00aa';
+        obstacles.forEach(o => {
+          ctx.fillRect(o.x - o.size/2, o.y - o.size/2, o.size, o.size);
+        });
+        // draw score
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '20px sans-serif';
+        ctx.fillText('Score: ' + state.score, 10, 30);
+        // game over overlay
+        if (state.state === 'gameover') {
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.font = '48px sans-serif';
+          ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+          ctx.font = '24px sans-serif';
+          ctx.fillText('Score: ' + state.score, canvas.width/2, canvas.height/2 + 20);
+          ctx.fillText('Press R or click Restart', canvas.width/2, canvas.height/2 + 60);
+        }
+      }
+
+      // input handling
+      canvas.addEventListener('mousedown', () => { player.growing = true; player.shrinking = false; });
+      canvas.addEventListener('mouseup', () => { player.growing = false; player.shrinking = true; });
+      canvas.addEventListener('mouseleave', () => { player.growing = false; player.shrinking = false; });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'r' || e.key === 'R') reset();
+      });
+      restartBtn.addEventListener('click', reset);
+
+      // start game immediately
+      reset();
+    })();
+  </script>
+</body>
+</html>
