@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Arc Bounce</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Arc Bounce</h1>
+    <p class="game-description">A dot arcs forward, bouncing off top and bottom; tap to invert its vertical velocity and steer through slanted gaps.</p>
+    <ul class="game-controls">
+      <li>Tap or click to invert vertical direction</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // Placeholder script to avoid console errors
+    // Minimal game loop that does nothing but publish state
+const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  // === STATE ==============================================================
+  // Plain object literals for game entities
+  const player = { x: 400, y: 300, radius: 5, vy: 0, speedX: 200 };
+  const hazards = []; // array of {x,y,w,h, ...}
+  let score = 0;
+  let phase = 'menu'; // 'menu' | 'playing' | 'gameover'
+
+    let loopId = null;
+    let audioCtx = null; // lazy init
+    // === AUDIO (lazy) =======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch (e) {
+        console.error('beep error', e);
+      }
+    }
+
+function publishState() {
+       // Determine visibility (player inside canvas bounds)
+       const visible = player.x + player.radius >= 0 && player.x - player.radius <= canvas.width &&
+                       player.y + player.radius >= 0 && player.y - player.radius <= canvas.height;
+       window.__game = {
+         state: phase === 'playing' ? 'playing' : (phase === 'gameover' ? 'gameover' : 'menu'),
+         score: score,
+         player: { x: player.x, y: player.y, visible: visible },
+         objective: 'Steer the dot through gaps by tapping to invert vertical velocity.'
+       };
+     }
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      let lastTime = performance.now();
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          // clear canvas
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          update(dt);
+          render();
+          publishState();
+        } catch(e) { console.error(e); }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === UPDATE =============================================================
+    // Game constants
+    const HAZARD_SPEED = 200; // px/sec
+    const SPAWN_INTERVAL = 1.5; // seconds
+    const SAFE_RADIUS = 150; // avoid spawning near player at start
+    let spawnTimer = 0;
+    function spawnHazard() {
+      // hazards are vertical bars moving left to right (or right to left?) Choose left to right.
+      const y = Math.random() * canvas.height;
+      const w = 20;
+      const h = 60;
+      const x = -w; // start off left
+      hazards.push({ x, y, w, h, vy: 0 });
+    }
+    function update(dt) {
+      if (phase !== 'playing') return;
+      // player horizontal movement (auto forward?) concept says dot moves forward automatically. We'll move right.
+      player.x += player.speedX * dt;
+      player.y += player.vy * dt;
+      // wrap or bounce vertical walls
+      if (player.y - player.radius < 0) { player.y = player.radius; player.vy = Math.abs(player.vy); }
+      if (player.y + player.radius > canvas.height) { player.y = canvas.height - player.radius; player.vy = -Math.abs(player.vy); }
+      // spawn hazards
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        // ensure safe distance at spawn
+        const testX = -20;
+        const testY = Math.random() * canvas.height;
+        const dx = testX - player.x;
+        const dy = testY - player.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > SAFE_RADIUS) {
+          hazards.push({ x: testX, y: testY, w: 20, h: 60, vx: HAZARD_SPEED });
+        }
+        spawnTimer = SPAWN_INTERVAL;
+      }
+      // move hazards
+      for (let i = hazards.length - 1; i >= 0; i--) {
+        const h = hazards[i];
+        h.x += h.vx * dt;
+        // remove off-screen
+        if (h.x > canvas.width) { hazards.splice(i, 1); score++; }
+        // collision with player
+        if (player.x + player.radius > h.x && player.x - player.radius < h.x + h.w &&
+            player.y + player.radius > h.y && player.y - player.radius < h.y + h.h) {
+          phase = 'gameover';
+          // stop the loop
+          if (loopId !== null) cancelAnimationFrame(loopId);
+        }
+      }
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      // clear and draw background
+      ctx.fillStyle = '#0f1320';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // draw hazards (high contrast red)
+      ctx.fillStyle = '#ff5252';
+      for (const h of hazards) {
+        ctx.fillRect(h.x, h.y, h.w, h.h);
+      }
+
+      // draw player dot (bright cyan)
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // draw HUD (score top‑left)
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText('Score ' + score, 12, 22);
+
+      // game‑over overlay
+      if (phase === 'gameover') {
+        ctx.fillStyle = 'rgba(10,10,15,0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ff5252';
+        ctx.textAlign = 'center';
+        ctx.font = '44px ui-sans-serif, system-ui';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillStyle = '#e6e6f0';
+        ctx.font = '20px ui-sans-serif, system-ui';
+        ctx.fillText('Final score ' + score, canvas.width / 2, canvas.height / 2 + 14);
+        ctx.fillStyle = '#a5a5b8';
+        ctx.font = '16px ui-sans-serif, system-ui';
+        ctx.fillText('Press R or click Restart', canvas.width / 2, canvas.height / 2 + 42);
+      }
+    }
+    // === INPUT ==============================================================
+    const keys = new Set();
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+    document.getElementById('restart').addEventListener('click', reset);
+    // tap / click to invert vertical velocity
+    canvas.addEventListener('pointerdown', () => { player.vy = -player.vy; });
+    function reset(){
+      // Reset game state
+      player.x = canvas.width/2;
+      player.y = canvas.height/2;
+      player.vy = 0;
+      player.radius = 5;
+      score = 0;
+      phase = 'playing';
+      hazards.length = 0;
+      startLoop();
+    }
+    // start immediately
+    startLoop();
+  </script>
+</body>
+</html>
