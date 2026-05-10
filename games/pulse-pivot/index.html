@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Pivot</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; width: 100%; height: auto; max-width: 800px; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <div id="loading" style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#0a0a0f;color:#7df9ff;font-size:24px;">Loading...</div>
+  <header class="game-header">
+    <h1>Pulse Pivot</h1>
+    <p class="game-description">Guide a revolving dot around a moving point, using timed pulses to rotate its orbit and dodge spikes.</p>
+    <ul class="game-controls">
+      <li>Tap (click) to emit a pulse and rotate</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+// Asset preloading
+const assets = [];
+function loadAssets() {
+  // Example: preload an image (placeholder transparent pixel)
+  const img = new Image();
+  const imgPromise = new Promise((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject();
+  });
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAocB9gq+htUAAAAASUVORK5CYII=';
+  assets.push(imgPromise);
+  // If there were audio files, they could be fetched similarly.
+  return Promise.all(assets);
+}
+
+    let W = 800, H = 600;
+    const ORBIT_RADIUS = 80;
+    const ORBIT_SPEED = Math.PI * 0.6; // rad/sec
+    // === STATE ==============================================================
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+    let loopId = null;
+    let lastTime = performance.now();
+    // player orbit state
+    let playerAngle = 0;
+    let target = { x: W/2, y: H/2, vx: 60, vy: 40 }; // moving target
+    // spikes
+    let spikes = [];
+    let spikeTimer = 0;
+    const SPIKE_INTERVAL_MIN = 0.8;
+    const SPIKE_INTERVAL_MAX = 1.8;
+    // difficulty scaling
+    let difficultyTime = 0;
+    // game phase
+    let phase = 'playing';
+    // pause flag
+    let paused = false;
+    // score
+    let score = 0;
+    // audio
+    let audioCtx = null;
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch (e) { }
+    }
+    // Observable state defaults
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score: score,
+        player: { x: target.x + Math.cos(playerAngle)*ORBIT_RADIUS,
+                  y: target.y + Math.sin(playerAngle)*ORBIT_RADIUS,
+                  visible: true },
+        objective: 'Rotate the orbit with pulses to dodge spikes.',
+      };
+    }
+    // === RESET ===============================================================
+    function reset() {
+      // reset orbit and state
+      playerAngle = 0;
+      target = { x: W/2, y: H/2, vx: 60, vy: 40 };
+      spikes = [];
+      spikeTimer = 0;
+      difficultyTime = 0;
+      score = 0;
+      phase = 'playing';
+      paused = false;
+      publishState();
+      startLoop();
+    }
+    // === LOOP ===============================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (e) { console.error('loop error', e); }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    // === UPDATE =============================================================
+    function update(dt) {
+      if (phase !== 'playing') return;
+      // move target, bounce off walls
+      target.x += target.vx * dt;
+      target.y += target.vy * dt;
+      if (target.x < 0 || target.x > W) target.vx *= -1;
+      if (target.y < 0 || target.y > H) target.vy *= -1;
+      // smooth rotation from pulses
+      if (rotationRemaining > 0) {
+        const rotStep = Math.min(rotationRemaining, ROTATION_SPEED * dt);
+        playerAngle += rotStep;
+        rotationRemaining -= rotStep;
+      } else {
+        playerAngle += ORBIT_SPEED * dt;
+      }
+      // pulse timer fade
+      if (pulseTimer > 0) pulseTimer -= dt;
+      // spike timer
+      spikeTimer -= dt;
+      if (spikeTimer <= 0) {
+        const angle = Math.random() * Math.PI * 2;
+        const r = ORBIT_RADIUS + 30 + Math.random() * 20;
+        spikes.push({ angle, r });
+        // difficulty scaling: increase spawn density over time
+        const min = Math.max(0.2, SPIKE_INTERVAL_MIN - difficultyTime * 0.1);
+        const max = Math.max(0.4, SPIKE_INTERVAL_MAX - difficultyTime * 0.15);
+        spikeTimer = min + Math.random() * (max - min);
+      }
+      // collision detection
+      const px = target.x + Math.cos(playerAngle) * ORBIT_RADIUS;
+      const py = target.y + Math.sin(playerAngle) * ORBIT_RADIUS;
+      for (const s of spikes) {
+        const sx = target.x + Math.cos(s.angle) * s.r;
+        const sy = target.y + Math.sin(s.angle) * s.r;
+        const dist = Math.hypot(px - sx, py - sy);
+        if (dist < 8) {
+          phase = 'gameover';
+          beep(200, 0.4);
+          break;
+        }
+      }
+      // score: increase over time while playing
+      score += dt;
+      // difficulty time accumulation
+      difficultyTime += dt;
+    }
+    // === RENDER =============================================================
+    function render() {
+      ctx.clearRect(0,0,W,H);
+      // draw spikes
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 2;
+      for (const s of spikes) {
+        const sx = target.x + Math.cos(s.angle) * s.r;
+        const sy = target.y + Math.sin(s.angle) * s.r;
+        ctx.beginPath();
+        ctx.moveTo(sx-5, sy-5);
+        ctx.lineTo(sx+5, sy+5);
+        ctx.moveTo(sx-5, sy+5);
+        ctx.lineTo(sx+5, sy-5);
+        ctx.stroke();
+      }
+      // pulse visual
+      if (pulseTimer > 0) {
+        const progress = 1 - pulseTimer / PULSE_DURATION;
+        const radius = ORBIT_RADIUS + progress * 40;
+        ctx.strokeStyle = `rgba(255, 215, 0, ${1 - progress})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(target.x, target.y, radius, 0, Math.PI*2);
+        ctx.stroke();
+      }
+      // draw target
+      ctx.fillStyle = '#ff00aa';
+      ctx.beginPath();
+      ctx.arc(target.x, target.y, 6, 0, Math.PI*2);
+      ctx.fill();
+      // draw player dot
+      const px = target.x + Math.cos(playerAngle)*ORBIT_RADIUS;
+      const py = target.y + Math.sin(playerAngle)*ORBIT_RADIUS;
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // === INPUT ==============================================================
+    // Tap (click) creates a pulse rotating orbit 90°
+    let pulseTimer = 0;
+    const PULSE_DURATION = 0.3; // seconds
+    const ROTATION_PER_PULSE = Math.PI / 2;
+    const ROTATION_SPEED = ROTATION_PER_PULSE / PULSE_DURATION; // rad per sec during pulse
+    let rotationRemaining = 0;
+    function handlePulse(ev) {
+      ev.preventDefault();
+      rotationRemaining += ROTATION_PER_PULSE;
+      pulseTimer = PULSE_DURATION;
+      beep(600, 0.1);
+    }
+    canvas.addEventListener('pointerdown', handlePulse);
+    canvas.addEventListener('touchstart', handlePulse);
+    canvas.addEventListener('click', handlePulse);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+      if (ev.key === 'p' || ev.key === 'P') { paused = !paused; }
+    });
+    restartBtn.addEventListener('click', reset);
+    // === BOOT ===============================================================
+    reset();
+  </script>
+<!--
+README
+---
+**Pulse Pivot**
+
+A lightweight HTML5 canvas game.
+
+### Build / Run
+1. No build step required – the game runs in the browser.
+2. Open `index.html` in a modern browser (Chrome, Firefox, Safari, Edge).
+3. Optionally serve the directory via a static server for asset loading, e.g.: `npx serve .` or `python -m http.server`.
+
+### Controls
+- **Tap / Click**: emit a pulse to rotate the orbit.
+- **R** or **Restart button**: reset the game.
+
+### Asset Loading
+- Assets are preloaded via `loadAssets()` before the game starts.
+- Replace the placeholder image data URI with actual image/sound URLs as needed.
+
+---
+-->
+</body>
+</html>
