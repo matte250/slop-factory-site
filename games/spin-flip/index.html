@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spin Flip</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Spin Flip</h1>
+    <p class="game-description">A dot continuously rotates while auto‑advancing. Tap or press Space to instantly reverse its spin direction, steering through winding corridors.</p>
+    <ul class="game-controls">
+      <li>Tap / click or Space to flip spin direction</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+// === CONFIG =============================================================
+const W = 800, H = 600;
+const PLAYER_SPEED = 200; // px/s forward
+const PLAYER_RADIUS = 8;
+const ANGULAR_SPEED = 1.5; // rad/s, magnitude of angularVelocity
+const WALL_THICK = 20;
+const WALL_SPEED = 150; // px/s downwards
+const WALL_INTERVAL = 2.0; // seconds
+const GAP_WIDTH = 100;
+const GAP_CENTERS = [250, 550]; // x positions of gap centers
+
+// === STATE ==============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const restartBtn = document.getElementById('restart');
+
+let player, walls, score, highScore, state, spawnTimer, keys, lastTime, loopId = null, audioCtx = null;
+
+function reset() {
+  player = {
+    x: W/2,
+    y: H/2,
+    angle: 0, // radians, 0 = rightward
+    angularVelocity: ANGULAR_SPEED, // positive = clockwise curvature
+    radius: PLAYER_RADIUS,
+    speed: PLAYER_SPEED,
+  };
+  walls = [];
+  score = 0;
+  highScore = highScore || 0;
+  state = 'playing';
+  spawnTimer = WALL_INTERVAL;
+  keys = new Set();
+  lastTime = performance.now();
+  publishState();
+  startLoop();
+}
+
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+      publishState();
+    } catch (e) {
+      console.error('loop error', e);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+// === UPDATE =============================================================
+function update(dt) {
+  if (state !== 'playing') return;
+
+  // player movement
+  player.angle += player.angularVelocity * dt;
+  player.x += Math.cos(player.angle) * player.speed * dt;
+  player.y += Math.sin(player.angle) * player.speed * dt;
+  // wrap around edges
+  if (player.x < 0) player.x += W; else if (player.x >= W) player.x -= W;
+  if (player.y < 0) player.y += H; else if (player.y >= H) player.y -= H;
+
+  // wall spawning
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnWall();
+    spawnTimer += WALL_INTERVAL;
+  }
+
+  // move walls
+  for (const w of walls) {
+    w.y += WALL_SPEED * dt;
+  }
+
+  // collision & scoring
+  for (let i = walls.length - 1; i >= 0; i--) {
+    const w = walls[i];
+    // check if wall passed player (score) – only when wall is fully below player
+    if (w.y > player.y + PLAYER_RADIUS && !w.scored) {
+      w.scored = true;
+      score++;
+    }
+    // collision test: if player's y within wall thickness
+    if (player.y + PLAYER_RADIUS > w.y && player.y - PLAYER_RADIUS < w.y + WALL_THICK) {
+      // player x must be inside a gap to survive
+      const inGap = GAP_CENTERS.some(gc => {
+        const left = gc - GAP_WIDTH/2;
+        const right = gc + GAP_WIDTH/2;
+        return player.x >= left && player.x <= right;
+      });
+      if (!inGap) {
+        state = 'gameover';
+        if (score > highScore) highScore = score;
+        beep(200, 0.3);
+        break;
+      }
+    }
+    // remove off‑screen walls
+    if (w.y > H) walls.splice(i, 1);
+  }
+}
+
+function spawnWall() {
+  walls.push({ y: -WALL_THICK, scored: false });
+}
+
+function render() {
+  ctx.fillStyle = '#05050c';
+  ctx.fillRect(0, 0, W, H);
+
+  // draw walls
+  ctx.fillStyle = '#222';
+  for (const w of walls) {
+    const y = w.y;
+    // left segment
+    ctx.fillRect(0, y, GAP_CENTERS[0] - GAP_WIDTH/2, WALL_THICK);
+    // middle segment between gaps
+    ctx.fillRect(GAP_CENTERS[0] + GAP_WIDTH/2, y,
+      GAP_CENTERS[1] - GAP_CENTERS[0] - GAP_WIDTH, WALL_THICK);
+    // right segment
+    ctx.fillRect(GAP_CENTERS[1] + GAP_WIDTH/2, y, W - (GAP_CENTERS[1] + GAP_WIDTH/2), WALL_THICK);
+  }
+
+  // draw player
+  ctx.fillStyle = '#7df9ff';
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+  ctx.fill();
+
+  // HUD
+  ctx.fillStyle = '#e6e6f0';
+  ctx.font = '16px ui-sans-serif, system-ui';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Score ${score}`, 12, 22);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Best ${highScore}`, W-12, 22);
+
+  if (state === 'gameover') {
+    ctx.fillStyle = 'rgba(5,5,12,0.65)';
+    ctx.fillRect(0,0,W,H);
+    ctx.textAlign = 'center';
+    ctx.font = '44px ui-sans-serif, system-ui';
+    ctx.fillStyle = '#ff52ae';
+    ctx.fillText('Game Over', W/2, H/2 - 20);
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '20px ui-sans-serif, system-ui';
+    ctx.fillText(`Final score ${score}`, W/2, H/2 + 14);
+    ctx.fillStyle = '#a5a5b8';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.fillText('Press R or click Restart', W/2, H/2 + 42);
+  }
+}
+
+// === INPUT ==============================================================
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+  if (ev.key === ' ' || ev.key === 'Space') {
+    // flip spin direction
+    player.angularVelocity = -player.angularVelocity;
+    beep(440, 0.05);
+    ev.preventDefault();
+    return;
+  }
+  keys.add(ev.key);
+});
+
+document.addEventListener('keyup', ev => { keys.delete(ev.key); });
+
+document.addEventListener('click', ev => {
+  // treat any click as spin flip
+  player.angularVelocity = -player.angularVelocity;
+  beep(440, 0.05);
+});
+
+restartBtn.addEventListener('click', reset);
+
+// === AUDIO (lazy) =======================================================
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch {}
+}
+
+// === OBSERVABLE CONTRACT ===============================================
+function publishState() {
+  window.__game = {
+    state,
+    score,
+    player: {
+      x: player.x,
+      y: player.y,
+      visible: player.x >= 0 && player.x < W && player.y >= 0 && player.y < H,
+    },
+    objective: 'Flip the spin direction to steer through winding corridors and survive as long as possible.',
+  };
+}
+
+// === BOOT ===============================================================
+reset();
+  </script>
+</body>
+</html>
