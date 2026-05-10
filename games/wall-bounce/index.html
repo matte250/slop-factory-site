@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Wall Bounce</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Wall Bounce</h1>
+    <p class="game-description">A dot auto‑advances; each tap flips its vertical direction and adds an upward boost, letting you ricochet around obstacles with static gaps.</p>
+    <ul class="game-controls">
+      <li>Tap / Click / Touch to bounce</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const CANVAS_W = 800;
+  const CANVAS_H = 600;
+  const PLAYER_X = 100; // fixed horizontal position
+  const PLAYER_SPEED = 200; // px/s forward (simulated by moving obstacles left)
+  const PLAYER_RADIUS = 8;
+  const GRAVITY = 400; // px/s^2 downward
+  const BOUNCE_BOOST = 150; // added upward speed on tap
+  const OBSTACLE_W = 80;
+  const GAP_H = 120; // vertical gap size
+  const SPAWN_INTERVAL = 1.8; // seconds
+  const SAFE_RADIUS = 200; // initial safety zone
+
+  // === STATE =============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let player; // { x, y, vy, rotation, score, state }
+  let obstacles; // array of { x, gapY } where gapY is top of gap
+  let spawnTimer;
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+  let keys = new Set(); // for restart via 'r' key
+
+  // === RESET =============================================================
+  function reset() {
+    player = {
+      x: PLAYER_X,
+      y: CANVAS_H / 2,
+      vy: 0,
+      rotation: 0,
+      score: 0,
+      state: 'playing',
+    };
+    obstacles = [];
+    spawnTimer = SPAWN_INTERVAL;
+    keys.clear();
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP =============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) {
+        console.error('loop error', e);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (player.state !== 'playing') return;
+
+    // Apply gravity
+    player.vy += GRAVITY * dt;
+    // Update position
+    player.y += player.vy * dt;
+    player.rotation += (PLAYER_SPEED / PLAYER_RADIUS) * dt; // spin visually
+
+    // Keep player within vertical bounds; if hits top or bottom, clamp and reverse direction
+    if (player.y - PLAYER_RADIUS < 0) {
+      player.y = PLAYER_RADIUS;
+      player.vy = Math.abs(player.vy); // bounce downwards
+    }
+    if (player.y + PLAYER_RADIUS > CANVAS_H) {
+      player.y = CANVAS_H - PLAYER_RADIUS;
+      player.vy = -Math.abs(player.vy); // bounce upwards
+    }
+
+    // Obstacles move left at PLAYER_SPEED (simulating forward motion)
+    for (const o of obstacles) {
+      o.x -= PLAYER_SPEED * dt;
+    }
+    // Remove passed obstacles and score
+    while (obstacles.length && obstacles[0].x + OBSTACLE_W < PLAYER_X) {
+      obstacles.shift();
+      player.score++;
+      beep(880, 0.04);
+    }
+
+    // Collision detection
+    for (const o of obstacles) {
+      if (PLAYER_X + PLAYER_RADIUS > o.x && PLAYER_X - PLAYER_RADIUS < o.x + OBSTACLE_W) {
+        const withinGap = player.y >= o.gapY && player.y <= o.gapY + GAP_H;
+        if (!withinGap) {
+          player.state = 'gameover';
+          beep(110, 0.3);
+          break;
+        }
+      }
+    }
+
+    // Spawn timer
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnObstacle();
+      spawnTimer = SPAWN_INTERVAL;
+    }
+  }
+
+  function spawnObstacle() {
+    // Choose a gap position that respects safe radius at spawn time
+    let gapY;
+    do {
+      gapY = Math.random() * (CANVAS_H - GAP_H);
+    } while (Math.abs(gapY + GAP_H / 2 - player.y) < SAFE_RADIUS);
+    // Spawn just beyond right edge
+    const x = CANVAS_W + OBSTACLE_W;
+    obstacles.push({ x, gapY });
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#0f1320';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // Obstacles
+    ctx.fillStyle = '#ff00aa';
+    for (const o of obstacles) {
+      // Upper block
+      ctx.fillRect(o.x, 0, OBSTACLE_W, o.gapY);
+      // Lower block
+      ctx.fillRect(o.x, o.gapY + GAP_H, OBSTACLE_W, CANVAS_H - (o.gapY + GAP_H));
+    }
+
+    // Player dot (rotating visual cue)
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.rotation);
+    ctx.fillStyle = '#7df9ff';
+    ctx.beginPath();
+    ctx.arc(0, 0, PLAYER_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Score ${player.score}`, 12, 22);
+    ctx.textAlign = 'right';
+    ctx.fillText(`State ${player.state}`, CANVAS_W - 12, 22);
+
+    if (player.state === 'gameover') {
+      ctx.fillStyle = 'rgba(10,10,15,0.7)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.textAlign = 'center';
+      ctx.font = '44px ui-sans-serif, system-ui';
+      ctx.fillStyle = '#ff52ae';
+      ctx.fillText('Game Over', CANVAS_W / 2, CANVAS_H / 2 - 20);
+      ctx.font = '20px ui-sans-serif, system-ui';
+      ctx.fillText(`Final score ${player.score}`, CANVAS_W / 2, CANVAS_H / 2 + 14);
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.fillText('Press R or click Restart', CANVAS_W / 2, CANVAS_H / 2 + 42);
+    }
+  }
+
+  // === INPUT =============================================================
+  canvas.addEventListener('click', (e) => {
+    if (player.state !== 'playing') return;
+    // Flip vertical velocity and add boost upward
+    player.vy = -player.vy + BOUNCE_BOOST;
+    beep(540, 0.04);
+  });
+  // Touch support
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (player.state !== 'playing') return;
+    player.vy = -player.vy + BOUNCE_BOOST;
+    beep(540, 0.04);
+  }, { passive: false });
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+  });
+  document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: player.state === 'playing' ? 'playing' : 'gameover',
+      score: player.score,
+      player: {
+        x: player.x,
+        y: player.y,
+        visible: player.x >= 0 && player.x <= CANVAS_W && player.y >= 0 && player.y <= CANVAS_H,
+      },
+      objective: 'Tap to bounce the dot through obstacle gaps while it auto‑advances.',
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
