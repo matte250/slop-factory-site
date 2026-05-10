@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Phase Pulse</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#e6e6f0;font-family:ui-sans-serif,system-ui,sans-serif;}
+    .game-header {padding:12px 16px;border-bottom:1px solid #1d1d2a;}
+    .game-header h1 {margin:0;font-size:18px;color:#7df9ff;}
+    .game-header .game-description {margin:4px 0;color:#a5a5b8;}
+    .game-header .game-controls {margin:4px 0;padding-left:18px;color:#c8c8d8;}
+    main {display:flex;flex-direction:column;align-items:center;padding:16px;}
+    canvas {background:#0f1320;border:1px solid #2a2f44;}
+    .game-restart {margin-top:10px;padding:8px 14px;background:#1c2030;color:#7df9ff;border:1px solid #2a2f44;cursor:pointer;}
+    .game-restart:hover {background:#232842;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Phase Pulse</h1>
+    <p class="game-description">Guide an auto‑moving dot and tap to create a phase wave that lets it slip through obstacles. Time your phases to survive.</p>
+    <ul class="game-controls">
+      <li>Tap (click or space) to phase</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    // Configuration constants
+    const PLAYER_SPEED = 300; // pixels per second
+    const PLAYER_FRICTION = 0.9; // not used yet
+    const HAZARD_SPEED = 200; // pixels per second
+    const SPAWN_INTERVAL = 1.5; // seconds
+    const SAFE_RADIUS = 200; // pixels, safe area around start
+    const STAR_COUNT = 50; // background stars
+
+    // === STATE ==============================================================
+    // Core game state objects
+    const player = { x: 400, y: 300, radius: 8, visible: true };
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    // Background stars
+    const stars = [];
+    for (let i = 0; i < STAR_COUNT; i++) {
+      stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, r: Math.random() * 2 + 1 });
+    }
+    const hazards = []; // will hold obstacle objects
+    let score = 0;
+    let spawnTimer = SPAWN_INTERVAL;
+    const phase = { active: false, cooldown: 0, duration: 0.2, cooldownTime: 1.0 };
+
+    // === OBSERVABLE CONTRACT ===============================================
+let gameState = "playing"; // "playing" or "gameover"
+    function publishState() {
+      window.__game = {
+        state: gameState === "playing" ? "playing" : "gameover",
+        score,
+        player: { x: player.x, y: player.y, visible: player.visible },
+        objective: "Guide the dot and tap through obstacles."
+      };
+    }
+
+    // Initial publish
+    publishState();
+
+    // === LOOP =============================================================
+    let loopId = null;
+    let lastTime = performance.now();
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error('loop error', err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // Placeholder update and render to keep page functional
+    function update(dt) {
+      if (gameState !== "playing") return;
+      // Player horizontal movement based on keys
+      let dir = 0;
+      if (keys.has('ArrowRight') || keys.has('d') || keys.has('D')) dir += 1;
+      if (keys.has('ArrowLeft')  || keys.has('a') || keys.has('A')) dir -= 1;
+      player.x += dir * PLAYER_SPEED * dt;
+      // Clamp to canvas and update visibility
+      player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+      player.visible = player.x >= 0 && player.x <= canvas.width;
+
+      // Hazard spawn timer
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = SPAWN_INTERVAL;
+        const hazard = { x: canvas.width + 20, w: 30, h: canvas.height, color: '#ff5252', y: 0 };
+        const dx = hazard.x - player.x;
+        if (Math.abs(dx) < SAFE_RADIUS) hazard.x += SAFE_RADIUS;
+        hazards.push(hazard);
+      }
+
+      // Move hazards leftward and check collision
+      for (let i = hazards.length - 1; i >= 0; i--) {
+        const h = hazards[i];
+        h.x -= HAZARD_SPEED * dt;
+        const nearestX = Math.max(h.x, Math.min(player.x, h.x + h.w));
+        const nearestY = Math.max(h.y, Math.min(player.y, h.y + h.h));
+        const dx = player.x - nearestX;
+        const dy = player.y - nearestY;
+        if (dx*dx + dy*dy < player.radius*player.radius) {
+          gameState = "gameover";
+        }
+        // Score when hazard passes off-screen
+        if (h.x + h.w < 0) {
+          score += 10;
+          hazards.splice(i, 1);
+        }
+      }
+    }
+    function render() {
+      // Clear canvas
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Background stars
+      ctx.fillStyle = '#444';
+      for (const s of stars) {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+        ctx.fill();
+      }
+      // Draw player (high contrast)
+      ctx.fillStyle = '#ff00ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI*2);
+      ctx.fill();
+      // Draw hazards
+      for (const h of hazards) {
+        ctx.fillStyle = h.color;
+        ctx.fillRect(h.x, h.y, h.w, h.h);
+      }
+      // HUD
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Score ${score}`, 12, 22);
+
+      // Game‑over overlay
+      if (gameState === 'gameover') {
+        ctx.fillStyle = 'rgba(10,10,15,0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ff52ae';
+        ctx.font = '44px ui-sans-serif, system-ui';
+        ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+        ctx.fillStyle = '#e6e6f0';
+        ctx.font = '20px ui-sans-serif, system-ui';
+        ctx.fillText(`Final score ${score}`, canvas.width/2, canvas.height/2 + 14);
+        ctx.fillStyle = '#a5a5b8';
+        ctx.font = '16px ui-sans-serif, system-ui';
+        ctx.fillText('Press R or click Restart', canvas.width/2, canvas.height/2 + 42);
+      }
+    }
+
+    // === INPUT ==============================================================
+    const keys = new Set();
+    const restartBtn = document.getElementById('restart');
+    function reset() {
+      // Simple reset placeholder: reinitialize score and player position
+      score = 0;
+      player.x = 400;
+      player.y = 300;
+      player.visible = true;
+      phase.active = false;
+      phase.cooldown = 0;
+      // Restart loop
+      startLoop();
+    }
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener('click', reset);
+
+    // Start the loop immediately
+    startLoop();
+  </script>
+</body>
+</html>
