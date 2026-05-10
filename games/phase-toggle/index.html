@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Phase Toggle</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; image-rendering: pixelated; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Phase Toggle</h1>
+    <p class="game-description">Tap to switch the dot between solid and intangible states; solid collides with obstacles, intangible passes through them but cannot collect points, requiring precise timing to thread through alternating barriers.</p>
+    <ul class="game-controls">
+      <li>Space to toggle solid/intangible</li>
+      <li>Arrow Up/Down to move</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const CANVAS_W = 800;
+  const CANVAS_H = 600;
+  const PLAYER_X = 150;                     // horizontal position (fixed)
+  const PLAYER_RADIUS = 8;
+  const PLAYER_SPEED = 300;                 // px/s vertical
+  const OBSTACLE_SPEED = 200;               // px/s leftwards
+  const OBSTACLE_WIDTH = 40;
+  const GAP_HEIGHT = 120;                    // vertical gap size
+  const SPAWN_INTERVAL = 1.5;                // seconds between obstacles
+  const SAFE_RADIUS = 200;                   // safe area radius at start (px)
+  const INITIAL_SPAWN_DELAY = 3;            // seconds before first obstacle
+  const STATE_PLAYING = "playing";
+  const STATE_GAMEOVER = "gameover";
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const restartBtn = document.getElementById("restart");
+
+  let player = { y: CANVAS_H / 2, solid: true };
+  let obstacles = []; // each: { x, gapY, solid }
+  let keys = new Set();
+  let score = 0;
+  let highScore = 0;
+  let spawnTimer = INITIAL_SPAWN_DELAY;
+  let phase = STATE_PLAYING;
+  let lastTime = performance.now();
+  let loopId = null;
+  let audioCtx = null;
+
+  // === RESET ==============================================================
+  function reset() {
+    player = { y: CANVAS_H / 2, solid: true };
+    obstacles = [];
+    keys.clear();
+    score = 0;
+    spawnTimer = INITIAL_SPAWN_DELAY;
+    phase = STATE_PLAYING;
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP ==============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) {
+        console.error("loop error", e);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (phase !== STATE_PLAYING) return;
+    // Input handling
+    if (keys.has("ArrowUp")) player.y -= PLAYER_SPEED * dt;
+    if (keys.has("ArrowDown")) player.y += PLAYER_SPEED * dt;
+    // Clamp vertical position
+    player.y = Math.max(PLAYER_RADIUS, Math.min(CANVAS_H - PLAYER_RADIUS, player.y));
+
+    // Toggle solid state on space press (edge detection)
+    if (keys.has("Space")) {
+      // Space is handled as a toggle; we want to toggle only once per press.
+      // We'll use a separate flag to detect release.
+    }
+
+    // Move obstacles
+    for (let obs of obstacles) {
+      obs.x -= OBSTACLE_SPEED * dt;
+    }
+    // Remove passed obstacles and score
+    obstacles = obstacles.filter(obs => {
+      if (obs.x + OBSTACLE_WIDTH < PLAYER_X && player.solid && obs.solid) {
+        // Player successfully passed a solid barrier while solid -> score
+        score++;
+        if (score > highScore) highScore = score;
+        return false; // remove
+      }
+      // Remove if completely off screen
+      if (obs.x + OBSTACLE_WIDTH < 0) return false;
+      return true;
+    });
+
+    // Collision check (only when player is solid and obstacle is solid)
+    for (let obs of obstacles) {
+      if (!obs.solid || !player.solid) continue;
+      const withinX = PLAYER_X + PLAYER_RADIUS > obs.x && PLAYER_X - PLAYER_RADIUS < obs.x + OBSTACLE_WIDTH;
+      if (withinX) {
+        const inGap = player.y > obs.gapY && player.y < obs.gapY + GAP_HEIGHT;
+        if (!inGap) {
+          gameOver();
+          return;
+        }
+      }
+    }
+
+    // Spawn logic
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnObstacle();
+      spawnTimer = SPAWN_INTERVAL;
+    }
+  }
+
+  function spawnObstacle() {
+    // Determine solid/intangible alternating based on current score parity for simplicity
+    const solid = (score % 2) === 0; // alternate each obstacle
+    // Choose a gap position away from player for first few seconds
+    let gapY = Math.random() * (CANVAS_H - GAP_HEIGHT);
+    // Ensure safe spawn within SAFE_RADIUS if game just started (<3s since reset)
+    const timeSinceStart = (performance.now() - lastTime) / 1000; // approximate
+    if (timeSinceStart < 3) {
+      // reject and retry until gap is far enough from player.y
+      while (Math.abs((gapY + GAP_HEIGHT/2) - player.y) < SAFE_RADIUS) {
+        gapY = Math.random() * (CANVAS_H - GAP_HEIGHT);
+      }
+    }
+    obstacles.push({ x: CANVAS_W, gapY, solid });
+    // Audio cue
+    beep(solid ? 440 : 220, 0.05);
+  }
+
+  function gameOver() {
+    phase = STATE_GAMEOVER;
+    if (score > highScore) highScore = score;
+    beep(120, 0.2);
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = "#0f1320";
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    // Draw obstacles
+    for (let obs of obstacles) {
+      ctx.fillStyle = obs.solid ? "#ff00aa" : "rgba(255,0,0,0.2)"; // intangible shown translucent red
+      ctx.fillRect(obs.x, 0, OBSTACLE_WIDTH, obs.gapY);
+      ctx.fillRect(obs.x, obs.gapY + GAP_HEIGHT, OBSTACLE_WIDTH, CANVAS_H - (obs.gapY + GAP_HEIGHT));
+    }
+    // Draw player dot
+    ctx.beginPath();
+    ctx.arc(PLAYER_X, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+    ctx.fillStyle = player.solid ? "#7df9ff" : "#ffd23f"; // solid cyan, intangible yellow
+    ctx.fill();
+    // HUD
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "16px ui-sans-serif, system-ui";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score ${score}`, 12, 22);
+    ctx.textAlign = "right";
+    ctx.fillText(`Best ${highScore}`, CANVAS_W - 12, 22);
+
+    if (phase === STATE_GAMEOVER) {
+      ctx.fillStyle = "rgba(10,10,15,0.7)";
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.fillStyle = "#ff52ae";
+      ctx.textAlign = "center";
+      ctx.font = "44px ui-sans-serif, system-ui";
+      ctx.fillText("Game Over", CANVAS_W / 2, CANVAS_H / 2 - 20);
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "20px ui-sans-serif, system-ui";
+      ctx.fillText(`Final score ${score}` + (score === highScore && score > 0 ? " — new best!" : ""), CANVAS_W / 2, CANVAS_H / 2 + 16);
+      ctx.fillStyle = "#a5a5b8";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.fillText("Press R or click Restart", CANVAS_W / 2, CANVAS_H / 2 + 44);
+    }
+  }
+
+  // === INPUT =============================================================
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "r" || ev.key === "R") { reset(); return; }
+    if (phase !== STATE_PLAYING && ev.key !== " " && ev.key !== "Spacebar") return;
+    if (ev.key === " " || ev.key === "Spacebar") {
+      // toggle solid state
+      player.solid = !player.solid;
+      // optional beep feedback
+      beep(player.solid ? 660 : 330, 0.05);
+      return;
+    }
+    if (ev.key === "ArrowUp" || ev.key === "w" || ev.key === "W") keys.add("ArrowUp");
+    if (ev.key === "ArrowDown" || ev.key === "s" || ev.key === "S") keys.add("ArrowDown");
+    if (ev.key === "Space" || ev.key === " ") keys.add("Space");
+  });
+  document.addEventListener("keyup", (ev) => {
+    if (ev.key === "ArrowUp" || ev.key === "w" || ev.key === "W") keys.delete("ArrowUp");
+    if (ev.key === "ArrowDown" || ev.key === "s" || ev.key === "S") keys.delete("ArrowDown");
+    if (ev.key === "Space" || ev.key === " ") keys.delete("Space");
+  });
+  restartBtn.addEventListener("click", reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.07, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch (e) { }
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: phase,
+      score,
+      player: {
+        x: PLAYER_X,
+        y: player.y,
+        visible: true,
+      },
+      objective: "Toggle solid/intangible to thread through alternating barriers and collect points.",
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
