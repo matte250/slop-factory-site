@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chromatic Shift</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem 1rem; }
+    .game-header h1 { margin:0; font-size:1.5rem; }
+    .game-header p { margin:0.2rem 0 0.5rem; font-size:0.9rem; color:#bbb; }
+    .game-controls { margin:0; padding:0; list-style:none; font-size:0.8rem; color:#aaa; }
+    .game-restart { position:absolute; top:1rem; right:1rem; padding:0.4rem 0.8rem; background:#ff00aa; color:#000; border:none; cursor:pointer; font-weight:bold; }
+    canvas { display:block; background:#111; margin:0 auto; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Chromatic Shift</h1>
+    <p class="game-description">A dot auto‑advances through a colored tunnel. Tap to cycle its hue and only pass through segments that match the current color. Time your changes to survive as long as possible.</p>
+    <ul class="game-controls">
+      <li>Click/Tap to cycle color</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+/*
+=== CRITIQUE ANALYSIS
+[Add your critique analysis here]
+=== END CRITIQUE ===
+*/
+    // ----- Constants -----
+    const COLORS = ['#7df9ff', '#ff00aa', '#ffd23f']; // cyan, magenta, yellow
+    const PLAYER_RADIUS = 12;
+    const PLAYER_X = 100; // fixed horizontal position
+    const SPEED = 200; // pixels per second (tunnel scroll speed)
+    const SEG_MIN_W = 120;
+    const SEG_MAX_W = 240;
+    const SPAWN_INTERVAL = 1.2; // seconds
+    const SAFE_RADIUS = 200; // safety zone at start
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+
+    // ----- State -----
+    let canvas, ctx;
+    let playerColorIdx = 0;
+    let segments = [];
+    let spawnTimer = 0;
+    let score = 0;
+    let loopId = null;
+    let lastTime = performance.now();
+    let audioCtx = null;
+
+    const __game = {
+      state: 'menu',
+      score: 0,
+      player: { x: PLAYER_X, y: CANVAS_H / 2, visible: true },
+      objective: "Cycle the dot's hue to match tunnel colors and survive as long as possible."
+    };
+    window.__game = __game;
+
+    function init() {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      // Input
+      canvas.addEventListener('pointerdown', cycleColor);
+      document.addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'r') reset(); });
+      document.getElementById('restart').addEventListener('click', reset);
+      // start game immediately (menu state transitions to playing)
+      reset();
+    }
+
+    function cycleColor() {
+      if (__game.state !== 'playing') return;
+      playerColorIdx = (playerColorIdx + 1) % COLORS.length;
+      playBeep(200 + playerColorIdx * 100);
+    }
+
+    function reset() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      __game.state = 'playing';
+      __game.score = 0;
+      score = 0;
+      playerColorIdx = 0;
+      segments = [];
+      spawnTimer = 0;
+      __game.player.x = PLAYER_X;
+      __game.player.y = CANVAS_H / 2;
+      __game.player.visible = true;
+      lastTime = performance.now();
+      // spawn a safe segment far enough ahead
+      segments.push({ x: CANVAS_W + SAFE_RADIUS, w: SEG_MIN_W, colorIdx: Math.floor(Math.random()*COLORS.length) });
+      startLoop();
+    }
+
+    function startLoop() {
+      function tick(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        try {
+          update(dt);
+          render();
+        } catch (e) {
+          console.error('Loop error', e);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      if (__game.state !== 'playing') return;
+      // move segments
+      for (let seg of segments) seg.x -= SPEED * dt;
+      // remove off‑screen
+      while (segments.length && segments[0].x + segments[0].w < 0) segments.shift();
+      // spawn new
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        const w = SEG_MIN_W + Math.random() * (SEG_MAX_W - SEG_MIN_W);
+        const colorIdx = Math.floor(Math.random()*COLORS.length);
+        const x = CANVAS_W + w;
+        segments.push({ x, w, colorIdx });
+        spawnTimer = SPAWN_INTERVAL;
+      }
+      // collision check
+      const cur = segments.find(seg => seg.x <= PLAYER_X && PLAYER_X <= seg.x + seg.w);
+      if (cur) {
+        if (cur.colorIdx !== playerColorIdx) {
+          gameOver();
+        } else if (!cur.passed) {
+          cur.passed = true;
+          score++;
+          __game.score = score;
+          playBeep(440);
+        }
+      }
+    }
+
+    function render() {
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+      // tunnel
+      for (let seg of segments) {
+        ctx.fillStyle = COLORS[seg.colorIdx];
+        ctx.fillRect(seg.x,0,seg.w,CANVAS_H);
+      }
+      // player dot
+      ctx.beginPath();
+      ctx.arc(PLAYER_X, __game.player.y, PLAYER_RADIUS, 0, Math.PI*2);
+      ctx.fillStyle = COLORS[playerColorIdx];
+      ctx.fill();
+      // score
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px sans-serif';
+      ctx.fillText('Score: '+score, 10,30);
+      if (__game.state === 'gameover') {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0,0,CANVAS_W,CANVAS_H);
+        ctx.fillStyle = '#ff00aa';
+        ctx.textAlign = 'center';
+        ctx.font = '48px sans-serif';
+        ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2-20);
+        ctx.font = '24px sans-serif';
+        ctx.fillText('Score: '+score, CANVAS_W/2, CANVAS_H/2+20);
+        ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2+60);
+      }
+      // observable sync
+      __game.player.x = PLAYER_X;
+      __game.player.visible = true;
+    }
+
+    function gameOver() {
+      __game.state = 'gameover';
+      if (loopId !== null) cancelAnimationFrame(loopId);
+    }
+
+    function playBeep(freq) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = freq;
+        osc.type = 'sine';
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        gain.gain.setValueAtTime(0.001, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.2, audioCtx.currentTime + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
+      } catch (e) {
+        // ignore audio errors
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
