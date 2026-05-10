@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Momentum Bounce</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Momentum Bounce</h1>
+    <p class="game-description">Roll a dot, accumulate momentum, and bounce to navigate gaps.</p>
+    <ul class="game-controls">
+      <li>Tap to accelerate</li>
+      <li>Release tap to bounce</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === STATE ==============================================================
+let player = { x: 400, y: 300, vx: 0, vy: 0 };
+let hazards = [];
+let score = 0;
+let phase = "loading"; // will be set to 'playing' after init
+// Game script will be added later
+
+// === INPUT ==============================================================
+let keys = new Set();
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+  keys.add(ev.key);
+});
+
+document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+
+const restartBtn = document.getElementById('restart');
+restartBtn.addEventListener('click', reset);
+
+function reset() {
+  // TODO: implement reset logic
+  console.log('reset called');
+  // Reinitialize state if needed
+  player = { x: 400, y: 300, vx: 0, vy: 0 };
+  hazards = [];
+  score = 0;
+  phase = 'playing';
+  startLoop();
+}
+
+
+// === CONFIG =============================================================
+
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let lastTime = performance.now();
+let loopId = null;
+
+// === LOOP ==============================================================
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+    } catch (err) {
+      console.error("loop error", err);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+// Placeholder update/render to avoid errors
+function spawnHazard() {
+  // spawn at random edge, avoid player area
+  const side = Math.random() < 0.5 ? 'top' : 'bottom';
+  const x = Math.random() * canvas.width;
+  const y = side === 'top' ? -20 : canvas.height + 20;
+  const vy = side === 'top' ? HAZARD_SPEED : -HAZARD_SPEED;
+  hazards.push({ x, y, vx: 0, vy });
+}
+
+function update(dt) {
+  if (phase !== 'playing') return;
+  // Increment score each frame
+  score += 1;
+  if (phase !== 'playing') return;
+  // Player physics (existing)
+  if (keys.has(' ') ) {
+    player.vx += 200 * dt;
+  }
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  player.vx *= 0.99;
+  player.vy *= 0.99;
+  if (player.x < 0) { player.x = 0; player.vx = Math.abs(player.vx); }
+  if (player.x > canvas.width) { player.x = canvas.width; player.vx = -Math.abs(player.vx); }
+  if (player.y < 0) { player.y = 0; player.vy = Math.abs(player.vy); }
+  if (player.y > canvas.height) { player.y = canvas.height; player.vy = -Math.abs(player.vy); }
+
+  // Hazard spawn timing
+  spawnTimer += dt;
+  if (spawnTimer >= SPAWN_INTERVAL) {
+    spawnTimer -= SPAWN_INTERVAL;
+    // ensure safe distance
+    let tries = 0;
+    while (tries < 5) {
+      const side = Math.random() < 0.5 ? 'top' : 'bottom';
+      const x = Math.random() * canvas.width;
+      const y = side === 'top' ? -20 : canvas.height + 20;
+      const dy = side === 'top' ? HAZARD_SPEED : -HAZARD_SPEED;
+      const dx = (Math.random() - 0.5) * 50;
+      const dist = Math.hypot(x - player.x, (y < 0 ? 0 : canvas.height) - player.y);
+      if (dist > SAFE_RADIUS) { hazards.push({ x, y, vx: dx, vy: dy }); break; }
+      tries++;
+    }
+  }
+
+  // Update hazards
+  for (let i = hazards.length - 1; i >= 0; i--) {
+    const h = hazards[i];
+    h.x += h.vx * dt;
+    h.y += h.vy * dt;
+    // remove offscreen
+    if (h.y < -30 || h.y > canvas.height + 30) { hazards.splice(i, 1); continue; }
+    // collision with player
+    const d = Math.hypot(h.x - player.x, h.y - player.y);
+    if (d < PLAYER_R + HAZARD_R) {
+      phase = 'gameover';
+      // stop loop by not calling further updates
+    }
+  }
+
+  if (phase !== 'playing') return;
+  // Simple horizontal movement when space held
+  if (keys.has(' ') ) {
+    player.vx += 200 * dt; // accelerate
+  }
+  // Apply velocity
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  // Simple friction
+  player.vx *= 0.99;
+  player.vy *= 0.99;
+  // Keep within canvas bounds
+  if (player.x < 0) { player.x = 0; player.vx = Math.abs(player.vx); }
+  if (player.x > canvas.width) { player.x = canvas.width; player.vx = -Math.abs(player.vx); }
+  if (player.y < 0) { player.y = 0; player.vy = Math.abs(player.vy); }
+  if (player.y > canvas.height) { player.y = canvas.height; player.vy = -Math.abs(player.vy); }
+
+  // TODO: implement game logic
+}
+let audioCtx = null;
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch (e) {}
+}
+function render() {
+  // ... existing code ...
+  // Clear canvas
+  ctx.fillStyle = "#0f1320";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw hazards
+  ctx.fillStyle = "#ff5252";
+  for (const h of hazards) {
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, HAZARD_R, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Draw player (high contrast)
+  ctx.fillStyle = "#7df9ff";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, PLAYER_R, 0, Math.PI * 2);
+  ctx.fill();
+
+  // HUD score
+  if (phase !== 'playing') {
+    ctx.fillStyle = "rgba(10,10,15,0.7)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#ff5252";
+    ctx.textAlign = "center";
+    ctx.font = "44px ui-sans-serif, system-ui";
+    ctx.fillText("Game Over", canvas.width/2, canvas.height/2 - 20);
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "20px ui-sans-serif, system-ui";
+    ctx.fillText(`Final score ${score}`, canvas.width/2, canvas.height/2 + 14);
+    ctx.fillStyle = "#a5a5b8";
+    ctx.font = "16px ui-sans-serif, system-ui";
+    ctx.fillText("Press R or click Restart", canvas.width/2, canvas.height/2 + 42);
+  }
+
+  ctx.fillStyle = "#e6e6f0";
+  ctx.font = "16px ui-sans-serif, system-ui";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score ${score}`, 12, 22);
+}
+
+  </script>
+</body>
+</html>
