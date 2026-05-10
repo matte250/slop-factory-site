@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Split</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Split</h1>
+    <p class="game-description">A dot emits expanding rings; tap to split pulses and navigate obstacles for points.</p>
+    <ul class="game-controls">
+      <li>Tap / Click to split the pulse</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+
+
+
+// === STATE =============================================================
+// Define initial game state objects.
+const player = { x: 400, y: 300, radius: 10, vx: 0, vy: 0 };
+const hazards = []; // will hold obstacle objects
+let score = 0;
+let phase = "playing"; // "playing" | "gameover"
+let objective = "Avoid the red hazards";
+// Hazard spawn config
+const SAFE_RADIUS = 150; // avoid spawning too close to player
+let spawnTimer = 0;
+const SPAWN_INTERVAL = 1.5; // seconds
+// === END STATE =========================================================
+
+// === CONFIG =============================================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let loopId = null;
+let lastTime = performance.now();
+// Input tracking set
+const keys = new Set();
+// Lazy AudioContext
+let audioCtx = null;
+function getAudioContext() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      console.warn('AudioContext init failed', e);
+    }
+  }
+  return audioCtx;
+}
+function beep(freq = 440, duration = 0.1) {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.stop(ctx.currentTime + duration);
+  } catch (e) {
+    console.warn('beep failed', e);
+  }
+}
+// === END CONFIG =========================================================
+
+// === LOOP ===============================================================
+function update(dt) {
+  if (phase !== "playing") return;
+  // Player movement based on keys
+  const accel = 800; // px/sec^2
+  const maxSpeed = 400; // px/sec
+  const friction = 0.9;
+  let ax = 0, ay = 0;
+  if (keys.has('ArrowLeft') || keys.has('a') || keys.has('A')) ax -= accel;
+  if (keys.has('ArrowRight') || keys.has('d') || keys.has('D')) ax += accel;
+  if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) ay -= accel;
+  if (keys.has('ArrowDown') || keys.has('s') || keys.has('S')) ay += accel;
+  // apply acceleration
+  player.vx = (player.vx || 0) + ax * dt;
+  player.vy = (player.vy || 0) + ay * dt;
+  // clamp speed
+  const speed = Math.hypot(player.vx, player.vy);
+  if (speed > maxSpeed) {
+    player.vx = (player.vx / speed) * maxSpeed;
+    player.vy = (player.vy / speed) * maxSpeed;
+  }
+  // apply friction
+  player.vx *= friction;
+  player.vy *= friction;
+  // update position
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  // clamp within canvas
+  player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+  player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+  // Increment score over time (1 point per second)
+  const newScore = Math.floor(score + dt);
+  if (newScore !== score) {
+    beep(600);
+  }
+  score = newScore;
+
+}
+
+function renderPlayer() {
+  ctx.fillStyle = "#7df9ff";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function renderBackground() {
+  // solid background color
+  ctx.fillStyle = "#0f1320";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function renderHazards() {
+  ctx.fillStyle = "#ff4d4d"; // high contrast red
+  for (const h of hazards) {
+    if (!h.alive) continue;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function renderHUD() {
+  ctx.fillStyle = "#e6e6f0";
+  ctx.font = "16px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`Score: ${score}` , 10, 10);
+}
+
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      // clear and redraw everything
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      renderBackground();
+      renderHazards();
+      renderPlayer();
+      renderHUD();
+      // Populate observable contract
+      window.__game = {
+        state: phase,
+        score: score,
+        player: { x: player.x, y: player.y, visible: phase === "playing" },
+        objective: objective
+      };
+      if (phase === "gameover") {
+        renderGameOver();
+      }
+    } catch (err) {
+      console.error("loop error", err);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+function renderGameOver() {
+  // dim overlay
+  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#e6e6f0";
+  ctx.font = "32px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 30);
+  ctx.font = "20px sans-serif";
+  ctx.fillText(`Score: ${score}`, canvas.width / 2, canvas.height / 2 + 10);
+  ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 40);
+}
+// === END LOOP ===========================================================
+
+// === INPUT ==============================================================
+function reset() {
+  // reinitialize game state
+  player.x = 400; player.y = 300;
+  score = 0;
+  phase = "playing";
+  hazards.length = 0;
+  keys.clear();
+  startLoop();
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "r" || ev.key === "R") { reset(); return; }
+  keys.add(ev.key);
+});
+document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+const restartBtn = document.getElementById("restart");
+restartBtn.addEventListener("click", reset);
+// === END INPUT ===========================================================
+
+// Start the game
+startLoop();
+
+// Game script will be added in subsequent tasks.
+  </script>
+</body>
+</html>
