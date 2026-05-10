@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rotating Blade</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Rotating Blade</h1>
+    <p class="game-description">Control a rotating line and time boosts to slip through rotating corridor gaps as the level scrolls down.</p>
+    <ul class="game-controls">
+      <li>Space or click to speed up rotation</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const W = 800, H = 600;
+  const PLAYER_X = W/2, PLAYER_Y = H/2;
+  const PLAYER_LINE_LEN = 30;
+  const BASE_AV = Math.PI/4; // rad/s
+  const BOOST_DELTA = Math.PI; // added rad/s
+  const BOOST_DURATION = 0.3; // seconds
+  const SCROLL_SPEED = 200; // px/s
+  const OBSTACLE_AV = Math.PI/4; // rad/s clockwise
+  const OBSTACLE_RADIUS = 250;
+  const WALL_THICK = 20;
+  const GAP_ANGLE = (20/180)*Math.PI; // 20 degrees in rad
+  const SPAWN_INTERVAL = 2.0; // seconds
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let player; // { angle, angularVelocity, boostTimer }
+  let obstacles; // array of { y, rot, passed }
+  let spawnTimer;
+  let score, highScore = 0;
+  let phase; // 'playing' | 'gameover'
+  let keys; // Set of pressed keys
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+
+  // === RESET ==============================================================
+  function reset() {
+    player = { angle: 0, angularVelocity: BASE_AV, boostTimer: 0 };
+    obstacles = [];
+    spawnTimer = SPAWN_INTERVAL;
+    score = 0;
+    phase = 'playing';
+    keys = new Set();
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP ===============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) { console.error('loop error', e); }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (phase !== 'playing') return;
+
+    // Boost handling
+    if (keys.has(' ') || keys.has('Space')) {
+      if (player.boostTimer <= 0) {
+        player.angularVelocity = BASE_AV + BOOST_DELTA;
+        player.boostTimer = BOOST_DURATION;
+        beep(800, 0.04);
+      }
+    }
+    if (player.boostTimer > 0) {
+      player.boostTimer -= dt;
+      if (player.boostTimer <= 0) {
+        player.angularVelocity = BASE_AV;
+      }
+    }
+    // Rotate player
+    player.angle += player.angularVelocity * dt;
+    // Keep angle within 0..2π for numeric stability
+    if (player.angle > Math.PI*2) player.angle -= Math.PI*2;
+
+    // Spawn obstacles
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      obstacles.push({ y: -50, rot: 0, passed: false });
+      spawnTimer = SPAWN_INTERVAL;
+    }
+
+    // Update obstacles
+    for (const obs of obstacles) {
+      obs.y += SCROLL_SPEED * dt;
+      obs.rot += OBSTACLE_AV * dt; // clockwise
+    }
+
+    // Collision / scoring
+    for (const obs of obstacles) {
+      if (!obs.passed && obs.y >= PLAYER_Y) {
+        // Determine if player's angle is within a safe gap
+        const rel = ((player.angle - obs.rot) % (Math.PI*2) + Math.PI*2) % (Math.PI*2); // 0..2π
+        const gap0 = GAP_ANGLE/2;
+        const gap1 = Math.PI - GAP_ANGLE/2;
+        const safe = (rel <= gap0) || (rel >= Math.PI*2 - gap0) || (rel >= Math.PI - GAP_ANGLE/2 && rel <= Math.PI + GAP_ANGLE/2);
+        if (!safe) {
+          phase = 'gameover';
+          if (score > highScore) highScore = score;
+          beep(110, 0.3);
+          break;
+        } else {
+          obs.passed = true;
+          score += 1;
+          beep(440, 0.06);
+        }
+      }
+    }
+    // Remove obstacles that have left the screen
+    obstacles = obstacles.filter(o => o.y - OBSTACLE_RADIUS < H + 100);
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#05050c';
+    ctx.fillRect(0,0,W,H);
+
+    // Draw obstacles as two wall arcs (exclude gaps)
+    ctx.strokeStyle = '#a5a5b8';
+    ctx.lineWidth = WALL_THICK;
+    for (const obs of obstacles) {
+      const cx = PLAYER_X;
+      const cy = obs.y;
+      const r = OBSTACLE_RADIUS;
+      // first wall: from gap0 end to gap1 start
+      const start1 = obs.rot + GAP_ANGLE/2;
+      const end1 = obs.rot + Math.PI - GAP_ANGLE/2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, start1, end1);
+      ctx.stroke();
+      // second wall: from gap1 end to wrap around to gap0 start
+      const start2 = obs.rot + Math.PI + GAP_ANGLE/2;
+      const end2 = obs.rot + Math.PI*2 - GAP_ANGLE/2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, start2, end2);
+      ctx.stroke();
+    }
+
+    // Draw player line
+    ctx.save();
+    ctx.translate(PLAYER_X, PLAYER_Y);
+    ctx.rotate(player.angle);
+    ctx.strokeStyle = '#7df9ff';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -PLAYER_LINE_LEN);
+    ctx.stroke();
+    ctx.restore();
+
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Score ${score}`, 12, 22);
+    ctx.textAlign = 'right';
+    ctx.fillText(`Best ${highScore}`, W-12, 22);
+
+    if (phase === 'gameover') {
+      ctx.fillStyle = 'rgba(5,5,12,0.65)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#ff52ae';
+      ctx.textAlign = 'center';
+      ctx.font = '44px ui-sans-serif, system-ui';
+      ctx.fillText('Game Over', W/2, H/2 - 20);
+      ctx.font = '20px ui-sans-serif, system-ui';
+      ctx.fillText(`Final score ${score}`, W/2, H/2 + 14);
+      ctx.fillStyle = '#a5a5b8';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.fillText('Press R or click Restart', W/2, H/2 + 42);
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+    if (ev.key === ' ') ev.preventDefault();
+  });
+  document.addEventListener('keyup', ev => { keys.delete(ev.key); });
+  canvas.addEventListener('click', () => {
+    // emulate space press for boost
+    keys.add(' ');
+    // schedule removal after short delay to allow boost handling in next frame
+    setTimeout(() => keys.delete(' '), 0);
+  });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: phase,
+      score,
+      player: { x: PLAYER_X, y: PLAYER_Y, visible: true },
+      objective: 'Rotate the line and boost to slip through corridor gaps as they scroll down.'
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
