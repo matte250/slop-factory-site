@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spring Swing</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; image-rendering: pixelated; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Spring Swing</h1>
+    <p class="game-description">A dot is tethered to a moving anchor. Tap or click to change the spring’s rest length, swinging outward or inward to dodge rotating rings with gaps.</p>
+    <ul class="game-controls">
+      <li>Space or click to toggle spring length</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const CANVAS_W = 800;
+  const CANVAS_H = 600;
+  const CENTER_X = CANVAS_W / 2;
+  const CENTER_Y = CANVAS_H / 2;
+  const ANCHOR_RADIUS = 150;           // distance from centre
+  const ANCHOR_SPEED = 0.5;            // rad/s clockwise
+  const RING_RADIUS = 200;             // spawn radius
+  const RING_THICKNESS = 20;
+  const GAP_ANGLE = Math.PI / 3;       // 60°
+  const GAP_HALF = GAP_ANGLE / 2;
+  const REST_LENGTHS = [80, 110];      // short / long
+  const REST_TOGGLE_DELTA = 30;        // not used directly, lengths fixed
+  const SPAWN_INTERVAL = 2;            // seconds
+  const RING_ROT_SPEED = 1.0;          // rad/s clockwise
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let state = {
+    anchorAngle: 0,          // rad
+    restLength: REST_LENGTHS[0],
+    playerAngle: 0,          // rad, relative to centre
+    playerPos: { x: 0, y: 0 },
+    score: 0,
+    highScore: 0,
+    rings: [],               // array of { angle, spawnAngle, gapCenter }
+    spawnTimer: 0,
+    phase: 'playing',       // 'playing' | 'gameover'
+    lastTime: performance.now(),
+    loopId: null,
+    audioCtx: null,
+  };
+
+  const keys = new Set();
+
+  // === RESET ==============================================================
+  function reset() {
+    state.anchorAngle = 0;
+    state.restLength = REST_LENGTHS[0];
+    state.playerAngle = 0;
+    updatePlayerPos();
+    state.score = 0;
+    state.rings = [];
+    state.spawnTimer = SPAWN_INTERVAL;
+    state.phase = 'playing';
+    state.lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP / UPDATE =====================================================
+  function startLoop() {
+    if (state.loopId !== null) cancelAnimationFrame(state.loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - state.lastTime) / 1000, 0.1);
+        state.lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) {
+        console.error('loop error', e);
+      }
+      state.loopId = requestAnimationFrame(tick);
+    }
+    state.loopId = requestAnimationFrame(tick);
+  }
+
+  function update(dt) {
+    if (state.phase !== 'playing') return;
+
+    // handle input
+    if (keys.has('Space')) {
+      // toggle rest length
+      state.restLength = (state.restLength === REST_LENGTHS[0]) ? REST_LENGTHS[1] : REST_LENGTHS[0];
+      beep(440, 0.08);
+      keys.delete('Space'); // consume
+    }
+    if (keys.has('R')) {
+      reset();
+      return;
+    }
+
+    // anchor motion
+    state.anchorAngle += ANCHOR_SPEED * dt;
+    // keep within 0-2π for numerical stability
+    if (state.anchorAngle > Math.PI * 2) state.anchorAngle -= Math.PI * 2;
+
+    // player follows anchor angle (same angular position) for simplicity
+    state.playerAngle = state.anchorAngle;
+    updatePlayerPos();
+
+    // spawn rings
+    state.spawnTimer -= dt;
+    if (state.spawnTimer <= 0) {
+      spawnRing();
+      state.spawnTimer += SPAWN_INTERVAL;
+    }
+
+    // update rings and check collision / scoring
+    for (const ring of state.rings) {
+      const prevAngle = ring.angle;
+      ring.angle += RING_ROT_SPEED * dt;
+      // keep angle bounded
+      if (ring.angle > Math.PI * 2) ring.angle -= Math.PI * 2;
+
+      // score when a full rotation completed
+      if (ring.angle < prevAngle) { // wrapped around
+        state.score++;
+        if (state.score > state.highScore) state.highScore = state.score;
+        beep(660, 0.06);
+      }
+
+      // collision check
+      const dx = state.playerPos.x - CENTER_X;
+      const dy = state.playerPos.y - CENTER_Y;
+      const dist = Math.hypot(dx, dy);
+      const inner = RING_RADIUS - RING_THICKNESS / 2;
+      const outer = RING_RADIUS + RING_THICKNESS / 2;
+      if (dist >= inner && dist <= outer) {
+        // angle of player around centre
+        let playerAng = Math.atan2(dy, dx);
+        if (playerAng < 0) playerAng += Math.PI * 2;
+        // gap centers rotate with ring
+        const gap1 = ring.angle; // centre of first gap
+        const gap2 = (ring.angle + Math.PI) % (Math.PI * 2);
+        const inGap = (Math.abs(normalizeAngle(playerAng - gap1)) <= GAP_HALF) ||
+                      (Math.abs(normalizeAngle(playerAng - gap2)) <= GAP_HALF);
+        if (!inGap) {
+          gameOver();
+          return;
+        }
+      }
+    }
+  }
+
+  function normalizeAngle(a) {
+    // return angle in range [-π, π]
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  }
+
+  function spawnRing() {
+    // gap center aligned with current anchor angle
+    const gapCenter = state.anchorAngle;
+    state.rings.push({ angle: gapCenter, spawnAngle: gapCenter });
+  }
+
+  function updatePlayerPos() {
+    const ax = CENTER_X + ANCHOR_RADIUS * Math.cos(state.anchorAngle);
+    const ay = CENTER_Y + ANCHOR_RADIUS * Math.sin(state.anchorAngle);
+    state.playerPos.x = ax + state.restLength * Math.cos(state.playerAngle);
+    state.playerPos.y = ay + state.restLength * Math.sin(state.playerAngle);
+  }
+
+  function gameOver() {
+    state.phase = 'gameover';
+    beep(120, 0.2);
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    // clear background
+    ctx.fillStyle = '#0f1320';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // draw anchor
+    ctx.fillStyle = '#ff00aa';
+    const ax = CENTER_X + ANCHOR_RADIUS * Math.cos(state.anchorAngle);
+    const ay = CENTER_Y + ANCHOR_RADIUS * Math.sin(state.anchorAngle);
+    ctx.beginPath();
+    ctx.arc(ax, ay, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // draw spring line
+    ctx.strokeStyle = '#7df9ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(state.playerPos.x, state.playerPos.y);
+    ctx.stroke();
+
+    // draw player dot
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.arc(state.playerPos.x, state.playerPos.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // draw rings
+    for (const ring of state.rings) {
+      ctx.strokeStyle = '#7df9ff';
+      ctx.lineWidth = RING_THICKNESS;
+      ctx.beginPath();
+      ctx.arc(CENTER_X, CENTER_Y, RING_RADIUS, 0, Math.PI * 2);
+      ctx.stroke();
+      // draw gaps as transparent arcs (overwrite with background)
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = RING_THICKNESS + 2; // ensure clean cut
+      ctx.beginPath();
+      ctx.arc(CENTER_X, CENTER_Y, RING_RADIUS, ring.angle - GAP_HALF, ring.angle + GAP_HALF);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(CENTER_X, CENTER_Y, RING_RADIUS, ring.angle + Math.PI - GAP_HALF, ring.angle + Math.PI + GAP_HALF);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText('Score ' + state.score, 12, 22);
+    ctx.textAlign = 'right';
+    ctx.fillText('Best ' + state.highScore, CANVAS_W - 12, 22);
+
+    if (state.phase === 'gameover') {
+      ctx.fillStyle = 'rgba(10,10,15,0.7)';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.fillStyle = '#ff00aa';
+      ctx.textAlign = 'center';
+      ctx.font = '44px ui-sans-serif, system-ui';
+      ctx.fillText('Game Over', CANVAS_W / 2, CANVAS_H / 2 - 20);
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '20px ui-sans-serif, system-ui';
+      ctx.fillText('Final score ' + state.score, CANVAS_W / 2, CANVAS_H / 2 + 16);
+      ctx.fillStyle = '#a5a5b8';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.fillText('Press R or click Restart', CANVAS_W / 2, CANVAS_H / 2 + 44);
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'r' || e.key === 'R') { keys.add('R'); }
+    if (e.code === 'Space') { keys.add('Space'); }
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'r' || e.key === 'R') { keys.delete('R'); }
+    if (e.code === 'Space') { keys.delete('Space'); }
+  });
+  canvas.addEventListener('pointerdown', () => {
+    keys.add('Space');
+    // consume after next update (handled in update)
+  });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = state.audioCtx.createOscillator();
+      const gain = state.audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.06, state.audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, state.audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(state.audioCtx.destination);
+      osc.start();
+      osc.stop(state.audioCtx.currentTime + durSec);
+    } catch (e) {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    const p = state.playerPos;
+    window.__game = {
+      state: state.phase,
+      score: state.score,
+      player: {
+        x: p.x,
+        y: p.y,
+        visible: p.x >= 0 && p.x <= CANVAS_W && p.y >= 0 && p.y <= CANVAS_H,
+      },
+      objective: 'Dodge rotating gaps by changing spring length.',
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
