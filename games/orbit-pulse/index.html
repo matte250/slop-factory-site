@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Orbit Pulse</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Orbit Pulse</h1>
+    <p class="game-description">A dot orbits a moving nucleus; tapping releases a radial pulse that expands the orbit to jump over incoming ring barriers.</p>
+    <ul class="game-controls">
+      <li>Tap or click to pulse</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const W = 800, H = 600;
+  const PLAYER_THRUST = 200; // px/sec^2
+  const PLAYER_FRICTION = 0.8; // per second decay factor
+  const HAZARD_RADIUS = 20;
+  const HAZARD_SPEED = 100; // px/sec
+  const SAFE_RADIUS = 100; // spawn safe distance from player
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  // Core game objects
+  let player = { x: W/2, y: H/2, visible: true };
+  let hazards = []; // array of hazard objects (e.g., rings)
+  let pulse = null; // active pulse effect, if any
+  let score = 0;
+  let phase = 'playing'; // menu | playing | gameover
+  let keys = new Set();
+  let hazardSpawnTimer = 0;
+  let lastTime = performance.now();
+  let loopId = null;
+
+  // === RESET ==============================================================
+  function reset() {
+    player = { x: W/2, y: H/2, visible: true };
+    hazards = [];
+    pulse = null;
+    score = 0;
+    phase = 'playing';
+    keys.clear();
+    hazardSpawnTimer = 1.0; // start after 1 sec
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  function spawnHazard() {
+    // spawn at random edge moving inward
+    const side = Math.floor(Math.random() * 4);
+    let x, y, vx, vy;
+    const speed = HAZARD_SPEED;
+    if (side === 0) { // top
+      x = Math.random() * W;
+      y = -HAZARD_RADIUS;
+      vx = 0;
+      vy = speed;
+    } else if (side === 1) { // right
+      x = W + HAZARD_RADIUS;
+      y = Math.random() * H;
+      vx = -speed;
+      vy = 0;
+    } else if (side === 2) { // bottom
+      x = Math.random() * W;
+      y = H + HAZARD_RADIUS;
+      vx = 0;
+      vy = -speed;
+    } else { // left
+      x = -HAZARD_RADIUS;
+      y = Math.random() * H;
+      vx = speed;
+      vy = 0;
+    }
+    // ensure safe spawn distance from player
+    const dx = x - player.x;
+    const dy = y - player.y;
+    if (Math.hypot(dx, dy) < SAFE_RADIUS) {
+      // shift outward a bit
+      const angle = Math.atan2(dy, dx);
+      x = player.x + Math.cos(angle) * SAFE_RADIUS;
+      y = player.y + Math.sin(angle) * SAFE_RADIUS;
+    }
+    hazards.push({ x, y, vx, vy, r: HAZARD_RADIUS });
+  }
+
+  // === LOOP ===============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (e) { console.error('loop error', e); }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  function update(dt) {
+    // Only run game logic when playing
+    if (phase !== 'playing') return;
+
+    // Update hazard spawn timer
+    hazardSpawnTimer -= dt;
+    if (hazardSpawnTimer <= 0) {
+      spawnHazard();
+      hazardSpawnTimer = 1.5 + Math.random() * 1.5; // next spawn in 1.5-3s
+    }
+    // Update hazards movement
+    for (const h of hazards) {
+      h.x += h.vx * dt;
+      h.y += h.vy * dt;
+    }
+    // Remove off-screen hazards and count survivors to increase score for each hazard that passed
+    const beforeCount = hazards.length;
+    hazards = hazards.filter(h => h.x >= -HAZARD_RADIUS && h.x <= W + HAZARD_RADIUS && h.y >= -HAZARD_RADIUS && h.y <= H + HAZARD_RADIUS);
+    const passed = beforeCount - hazards.length;
+    if (passed > 0) {
+      score += passed;
+      // play a short beep for each hazard cleared (higher pitch for each)
+      for (let i = 0; i < passed; i++) {
+        beep(400 + i * 50, 0.1);
+      }
+    }
+
+    // Player movement
+    let thrust = 0;
+    if (keys.has('ArrowUp') || keys.has('w') || keys.has('W')) thrust = 1;
+    if (thrust) {
+      const angle = 0; // player moves rightwards for now
+      player.x += Math.cos(angle) * PLAYER_THRUST * dt;
+      player.y += Math.sin(angle) * PLAYER_THRUST * dt;
+    }
+    // Keep player within bounds
+    if (player.x < 0) player.x = 0;
+    if (player.x > W) player.x = W;
+    if (player.y < 0) player.y = 0;
+    if (player.y > H) player.y = H;
+
+    // Collision detection
+    const PLAYER_RADIUS = 6;
+    for (const h of hazards) {
+      if (Math.hypot(h.x - player.x, h.y - player.y) < h.r + PLAYER_RADIUS) {
+        phase = 'gameover';
+        beep(200, 0.4);
+        break;
+      }
+    }
+
+    if (keys.has('r') || keys.has('R')) { reset(); }
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#05050c';
+    ctx.fillRect(0,0,W,H);
+    // draw player as a small circle
+    ctx.fillStyle = '#7df9ff';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 6, 0, Math.PI*2);
+    ctx.fill();
+    // Draw hazards
+    ctx.strokeStyle = '#ff7f7f';
+    ctx.lineWidth = 2;
+    for (const h of hazards) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // draw player as a small circle
+    ctx.fillStyle = '#7df9ff';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 6, 0, Math.PI*2);
+    ctx.fill();
+    // HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText('Score ' + score, 12, 22);
+    // Game over overlay
+    if (phase === 'gameover') {
+      // dim background
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#ff7f7f';
+      ctx.font = '48px ui-sans-serif, system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('Game Over', W/2, H/2 - 20);
+      ctx.font = '24px ui-sans-serif, system-ui';
+      ctx.fillText('Score: ' + score, W/2, H/2 + 20);
+      ctx.fillText('Press R or click Restart', W/2, H/2 + 60);
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+  });
+  document.addEventListener('keyup', ev => { keys.delete(ev.key); });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  let audioCtx = null;
+  function beep(freq, dur) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + dur);
+    } catch (e) { }
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  // === OBSERVABLE CONTRACT ===============================================
+function publishState() {
+    window.__game = {
+      state: phase,
+      score: score,
+      player: { x: player.x, y: player.y, visible: true },
+      objective: 'Orbit the nucleus and pulse to jump over barriers.'
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
