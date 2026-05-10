@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>World Slowdown</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#fff;font-family:sans-serif;overflow:hidden;}
+    .game-header {padding:0.5rem 1rem;background:#111;}
+    .game-header h1 {margin:0;font-size:1.5rem;}
+    .game-header p {margin:0.2rem 0 0.5rem;color:#ccc;}
+    .game-controls {margin:0;padding:0;list-style:none;display:flex;gap:1rem;}
+    .game-controls li {font-size:0.9rem;}
+    #game {display:block;background:#000;}
+    .game-restart {position:absolute;top:1rem;right:1rem;padding:0.5rem 1rem;background:#ff00aa;color:#fff;border:none;cursor:pointer;font-size:1rem;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>World Slowdown</h1>
+    <p class="game-description">A fast‑moving tunnel scrolls forward while you control a dot that can temporarily slow the world, threading through tight gaps.</p>
+    <ul class="game-controls">
+      <li>Press Space to slow the world</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const restartBtn = document.getElementById('restart');
+
+      const STATE = {MENU:'menu', PLAYING:'playing', GAMEOVER:'gameover'};
+      let loopId = null;
+      let lastTime = performance.now();
+
+      const game = {
+        state: STATE.MENU,
+        score: 0,
+        player: {x: canvas.width/2, y: canvas.height-80, radius: 10, visible:true},
+        worldSpeed: 200, // pixels per second
+        slowdown: false,
+        obstacles: [],
+        spawnTimer: 0,
+        objective: "Dodge incoming obstacles by slowing the world with Space."
+      };
+
+      // expose for validator
+      window.__game = {
+        state: game.state,
+        score: game.score,
+        player: {x: game.player.x, y: game.player.y, visible: game.player.visible},
+        objective: game.objective
+      };
+
+      function syncExpose(){
+        window.__game.state = game.state;
+        window.__game.score = game.score;
+        window.__game.player.x = game.player.x;
+        window.__game.player.y = game.player.y;
+        window.__game.player.visible = game.player.visible;
+      }
+
+      function reset(){
+        if(loopId!==null) cancelAnimationFrame(loopId);
+        game.state = STATE.PLAYING;
+        game.score = 0;
+        game.player.x = canvas.width/2;
+        game.player.y = canvas.height-80;
+        game.player.visible = true;
+        game.worldSpeed = 200;
+        game.slowdown = false;
+        game.obstacles = [];
+        game.spawnTimer = 0.5; // first spawn after half second
+        lastTime = performance.now();
+        syncExpose();
+        loopId = requestAnimationFrame(loop);
+      }
+
+      function gameOver(){
+        game.state = STATE.GAMEOVER;
+        syncExpose();
+      }
+
+      function spawnObstacle(){
+        const width = 30 + Math.random()*40;
+        const height = 20 + Math.random()*30;
+        // spawn at top, random x within canvas
+        const x = Math.random() * (canvas.width - width);
+        const y = -height;
+        const speed = game.worldSpeed * (0.8 + Math.random()*0.4); // move downwards
+        game.obstacles.push({x, y, width, height, speed});
+      }
+
+      function update(dt){
+        if(game.state !== STATE.PLAYING) return;
+        // world speed modulation
+        const speedFactor = game.slowdown ? 0.3 : 1.0;
+        // spawn logic
+        game.spawnTimer -= dt * speedFactor;
+        if(game.spawnTimer <= 0){
+          spawnObstacle();
+          game.spawnTimer = 0.8 + Math.random()*0.7; // next spawn
+        }
+        // move obstacles
+        for(let i=game.obstacles.length-1;i>=0;i--){
+          const obs = game.obstacles[i];
+          obs.y += obs.speed * dt * speedFactor;
+          // collision detection (simple circle-rect)
+          const dx = Math.abs(game.player.x - (obs.x + obs.width/2));
+          const dy = Math.abs(game.player.y - (obs.y + obs.height/2));
+          if(dx <= (obs.width/2 + game.player.radius) && dy <= (obs.height/2 + game.player.radius)){
+            gameOver();
+            break;
+          }
+          // out of screen -> increase score and remove
+          if(obs.y > canvas.height){
+            game.score++;
+            game.obstacles.splice(i,1);
+          }
+        }
+        syncExpose();
+      }
+
+      function render(){
+        // clear
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        // draw player
+        ctx.fillStyle = '#7df9ff';
+        ctx.beginPath();
+        ctx.arc(game.player.x, game.player.y, game.player.radius,0,Math.PI*2);
+        ctx.fill();
+        // draw obstacles
+        ctx.fillStyle = '#ff00aa';
+        game.obstacles.forEach(o=>{
+          ctx.fillRect(o.x, o.y, o.width, o.height);
+        });
+        // draw score
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '20px sans-serif';
+        ctx.fillText('Score: '+game.score, 10, 30);
+        // draw state overlay on game over
+        if(game.state===STATE.GAMEOVER){
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(0,0,canvas.width,canvas.height);
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.font = '40px sans-serif';
+          ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+          ctx.font = '24px sans-serif';
+          ctx.fillText('Score: '+game.score, canvas.width/2, canvas.height/2 + 20);
+          ctx.fillText('Press R or click Restart', canvas.width/2, canvas.height/2 + 60);
+        }
+      }
+
+      function loop(now){
+        const dt = Math.min((now - lastTime)/1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        if(game.state!==STATE.GAMEOVER){
+          loopId = requestAnimationFrame(loop);
+        }
+      }
+
+      // input handling
+      window.addEventListener('keydown', e=>{
+        if(e.code === 'Space'){
+          game.slowdown = true;
+        }
+        if(e.code === 'KeyR'){
+          reset();
+        }
+      });
+      window.addEventListener('keyup', e=>{
+        if(e.code === 'Space'){
+          game.slowdown = false;
+        }
+      });
+      restartBtn.addEventListener('click', reset);
+
+      // start automatically
+      reset();
+    })();
+  </script>
+</body>
+</html>
