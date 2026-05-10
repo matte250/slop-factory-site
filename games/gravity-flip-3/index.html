@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Gravity Flip</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; margin: 0 auto; background: #05050c; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Gravity Flip</h1>
+    <p class="game-description">Tap to flip gravity and guide a falling dot through alternating floor and ceiling gaps.</p>
+    <ul class="game-controls">
+      <li>Tap (or click) to flip gravity</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <canvas id="game" width="800" height="600"></canvas>
+  <button id="restart" class="game-restart" type="button">Restart</button>
+  <script>
+  // === CONFIG =============================================================
+  const W = 800, H = 600;
+  const PLAYER_RADIUS = 8;
+  const GRAVITY_ACCEL = 500; // px/sec^2
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+  let loopId = null;
+  let lastTime = performance.now();
+  let player = { x: W/2, y: H/2, vy: 0 };
+  let gravity = 1; // 1 = down, -1 = up
+  let obstacles = [];
+  let spawnTimer = 0;
+  const SPAWN_INTERVAL = 1.5; // seconds
+  const SAFE_RADIUS_AT_START = 100; // pixels
+  let elapsed = 0;
+  let score = 0;
+  let phase = 'playing'; // 'playing' | 'gameover'
+
+  // === RESET ===============================================================
+  function reset() {
+    // Cancel any existing loop
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    // Reset game variables
+    player = { x: W/2, y: H/2, vy: 0 };
+    gravity = 1;
+    obstacles = [];
+    spawnTimer = 0;
+    elapsed = 0;
+    score = 0;
+    // Reset timing
+    lastTime = performance.now();
+    ctx.clearRect(0, 0, W, H);
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP / UPDATE =======================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error('loop error', err);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (phase !== 'playing') return;
+
+    // Update player physics
+    player.vy += GRAVITY_ACCEL * gravity * dt;
+    player.y += player.vy * dt;
+    // Keep player within bounds (wrap)
+    if (player.y < 0) player.y = H;
+    if (player.y > H) player.y = 0;
+
+    // Spawn obstacles
+    elapsed += dt;
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      // alternate top/bottom gap
+      const top = Math.random() < 0.5; // true = gap at top, obstacle at bottom
+      const gapY = top ? 0 : H - 40; // placeholder gap height
+      const obstacle = {
+        x: W,
+        y: top ? 40 : 0,
+        w: 30,
+        h: H - 40,
+        topGap: top,
+      };
+      obstacles.push(obstacle);
+      spawnTimer = SPAWN_INTERVAL;
+    }
+    // Move obstacles
+    for (const o of obstacles) o.x -= 150 * dt;
+// Remove off-screen and check collisions
+      obstacles = obstacles.filter(o => {
+        const still = o.x + o.w > 0;
+        if (!still) score++;
+        // collision detection (ignore first SAFE_RADIUS_AT_START seconds)
+        if (elapsed > SAFE_RADIUS_AT_START/GRAVITY_ACCEL && phase === 'playing') {
+          const playerRect = { x: player.x - PLAYER_RADIUS, y: player.y - PLAYER_RADIUS, w: PLAYER_RADIUS*2, h: PLAYER_RADIUS*2 };
+          const obsRect = { x: o.x, y: o.y, w: o.w, h: o.h };
+          const collide = !(playerRect.x + playerRect.w < obsRect.x || playerRect.x > obsRect.x + obsRect.w || playerRect.y + playerRect.h < obsRect.y || playerRect.y > obsRect.y + obsRect.h);
+          if (collide) {
+            phase = 'gameover';
+            beep(110,0.3);
+          }
+        }
+        return still;
+      });
+  }
+
+// === RENDER ==============================================================
+  function render() {
+    // Background
+    ctx.fillStyle = '#05050c';
+    ctx.fillRect(0, 0, W, H);
+
+    // Obstacles
+    ctx.fillStyle = '#7df9ff';
+    for (const o of obstacles) {
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+    }
+
+    // Player
+    ctx.fillStyle = '#ffd23f';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+    ctx.fill();
+
+    // Score HUD
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '16px ui-sans-serif, system-ui';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Score ${score}`, 12, 22);
+  }
+
+// === INPUT ===============================================================
+   document.addEventListener('keydown', (ev) => {
+     if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+   });
+   restartBtn.addEventListener('click', reset);
+   // flip gravity on click or tap
+   canvas.addEventListener('click', () => {
+     gravity = -gravity;
+     beep(440, 0.1);
+   });
+
+  // === AUDIO (lazy) =========================================================
+  function beep() {}
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: 'playing',
+      score,
+      player: {
+        x: player.x,
+        y: player.y,
+        // visibility always true within canvas
+        visible: player.x >= 0 && player.x < W && player.y >= 0 && player.y < H,
+      },
+      objective: 'Flip gravity to navigate gaps and survive as long as possible.',
+    };
+  }
+
+  // === BOOT ================================================================
+  reset();
+</script>
+</body>
+</html>
