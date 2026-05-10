@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Magnet Polarity Switch</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#e6e6f0; font-family:ui-sans-serif,system-ui,sans-serif; }
+    .game-header { padding:12px 16px; border-bottom:1px solid #1d1d2a; }
+    .game-header h1 { margin:0; font-size:18px; color:#7df9ff; }
+    .game-header .game-description { margin:4px 0; color:#a5a5b8; }
+    .game-header .game-controls { margin:4px 0; padding-left:18px; color:#c8c8d8; }
+    main { display:flex; flex-direction:column; align-items:center; padding:16px; }
+    canvas { background:#0f1320; border:1px solid #2a2f44; image-rendering:pixelated; }
+    .game-restart { margin-top:10px; padding:8px 14px; background:#1c2030; color:#7df9ff; border:1px solid #2a2f44; cursor:pointer; }
+    .game-restart:hover { background:#232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Magnet Polarity Switch</h1>
+    <p class="game-description">Tap to flip polarity and steer a constantly moving dot through metal obstacles. Attract or repel to survive.</p>
+    <ul class="game-controls">
+      <li>Space or click to toggle polarity</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+// === CONFIG =============================================================
+const CANVAS_W = 800;
+const CANVAS_H = 600;
+const PLAYER_RADIUS = 8;
+const PLAYER_SPEED = 150; // px per second, forward (right)
+const POLARITY_FORCE = 200; // magnitude of attraction/repulsion per second squared
+const SPAWN_INTERVAL = 1.5; // seconds between obstacles
+const OBSTACLE_RADIUS = 20;
+const SAFE_RADIUS = 200; // pixels around start safe for first 3 seconds
+const MAX_OBSTACLES = 30;
+
+// === STATE ==============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const restartBtn = document.getElementById('restart');
+
+let player = { x: 100, y: CANVAS_H/2, vx: PLAYER_SPEED, vy: 0 };
+let polarity = 1; // 1 = attract, -1 = repel
+let obstacles = [];
+let spawnTimer = 0;
+let score = 0;
+let highScore = 0;
+let phase = 'playing'; // 'playing' | 'gameover'
+let lastTime = performance.now();
+let loopId = null;
+let audioCtx = null;
+let keys = new Set();
+
+// === RESET ==============================================================
+function reset() {
+  player = { x: 100, y: CANVAS_H/2, vx: PLAYER_SPEED, vy: 0 };
+  polarity = 1;
+  obstacles = [];
+  spawnTimer = SPAWN_INTERVAL;
+  score = 0;
+  phase = 'playing';
+  lastTime = performance.now();
+  publishState();
+  startLoop();
+}
+
+// === LOOP ==============================================================
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+      publishState();
+    } catch (e) {
+      console.error('loop error', e);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+// === UPDATE =============================================================
+function update(dt) {
+  if (phase !== 'playing') return;
+
+  // handle input (space / click toggles polarity)
+  if (keys.has('toggle')) {
+    polarity = -polarity;
+    beep(440, 0.08);
+    keys.delete('toggle');
+  }
+
+  // spawn obstacles
+  spawnTimer -= dt;
+  if (spawnTimer <= 0 && obstacles.length < MAX_OBSTACLES) {
+    spawnObstacle();
+    spawnTimer = SPAWN_INTERVAL;
+  }
+
+  // compute magnetic force from nearest obstacle
+  let fx = 0, fy = 0;
+  if (obstacles.length) {
+    const nearest = obstacles.reduce((best, o) => {
+      const d = Math.hypot(o.x - player.x, o.y - player.y);
+      return d < best.dist ? { obj: o, dist: d } : best;
+    }, { obj: null, dist: Infinity }).obj;
+    if (nearest) {
+      const dx = nearest.x - player.x;
+      const dy = nearest.y - player.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const direction = polarity === 1 ? 1 : -1; // attract or repel
+      const mag = (POLARITY_FORCE * direction) / (dist * dist);
+      fx += mag * (dx / dist);
+      fy += mag * (dy / dist);
+    }
+  }
+
+  // apply physics (Euler integration)
+  player.vx = PLAYER_SPEED + fx; // forward base speed + magnetic x component
+  player.vy = fy;
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // keep player within vertical bounds (wrap)
+  if (player.y < 0) player.y = CANVAS_H;
+  if (player.y > CANVAS_H) player.y = 0;
+
+  // check obstacle passage / collision
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    // collision
+    const d = Math.hypot(o.x - player.x, o.y - player.y);
+    if (d < PLAYER_RADIUS + OBSTACLE_RADIUS) {
+      gameOver();
+      return;
+    }
+    // passed (player.x > obstacle.x + radius)
+    if (player.x - PLAYER_RADIUS > o.x + OBSTACLE_RADIUS) {
+      score++;
+      obstacles.splice(i, 1);
+    }
+  }
+}
+
+function spawnObstacle() {
+  // spawn ahead of player, within canvas width, random y
+  const spawnX = player.x + CANVAS_W + Math.random() * 200; // off-screen right
+  let spawnY;
+  do {
+    spawnY = Math.random() * CANVAS_H;
+  } while (Math.hypot(spawnX - player.x, spawnY - player.y) < SAFE_RADIUS);
+  obstacles.push({ x: spawnX, y: spawnY });
+}
+
+function gameOver() {
+  phase = 'gameover';
+  if (score > highScore) highScore = score;
+  beep(200, 0.3);
+}
+
+// === RENDER =============================================================
+function render() {
+  ctx.fillStyle = '#0f1320';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // draw obstacles
+  ctx.fillStyle = '#ff00aa';
+  obstacles.forEach(o => {
+    ctx.beginPath();
+    ctx.arc(o.x - player.x + 100, o.y, OBSTACLE_RADIUS, 0, Math.PI*2);
+    ctx.fill();
+  });
+
+  // draw player
+  ctx.fillStyle = polarity === 1 ? '#7df9ff' : '#ffd23f';
+  ctx.beginPath();
+  ctx.arc(100, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+  ctx.fill();
+
+  // HUD
+  ctx.fillStyle = '#e6e6f0';
+  ctx.font = '16px ui-sans-serif,system-ui';
+  ctx.textAlign = 'left';
+  ctx.fillText('Score ' + score, 12, 22);
+  ctx.textAlign = 'right';
+  ctx.fillText('Best ' + highScore, CANVAS_W - 12, 22);
+
+  if (phase === 'gameover') {
+    ctx.fillStyle = 'rgba(10,10,15,0.7)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillStyle = '#ff52ae';
+    ctx.textAlign = 'center';
+    ctx.font = '44px ui-sans-serif,system-ui';
+    ctx.fillText('Game Over', CANVAS_W/2, CANVAS_H/2 - 20);
+    ctx.fillStyle = '#e6e6f0';
+    ctx.font = '20px ui-sans-serif,system-ui';
+    ctx.fillText('Final score ' + score, CANVAS_W/2, CANVAS_H/2 + 16);
+    ctx.fillStyle = '#a5a5b8';
+    ctx.font = '16px ui-sans-serif,system-ui';
+    ctx.fillText('Press R or click Restart', CANVAS_W/2, CANVAS_H/2 + 44);
+  }
+}
+
+// === INPUT ==============================================================
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+  if (ev.key === ' ' || ev.key === 'Spacebar') { keys.add('toggle'); }
+});
+canvas.addEventListener('click', () => { keys.add('toggle'); });
+restartBtn.addEventListener('click', reset);
+
+// === AUDIO (lazy) =======================================================
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch (e) { /* ignore */ }
+}
+
+// === OBSERVABLE CONTRACT ===============================================
+function publishState() {
+  window.__game = {
+    state: phase,
+    score: score,
+    player: {
+      x: 100,
+      y: player.y,
+      visible: player.y >= 0 && player.y <= CANVAS_H,
+    },
+    objective: 'Toggle polarity to steer the dot through obstacles.'
+  };
+}
+
+// === BOOT ===============================================================
+reset();
+  </script>
+</body>
+</html>
