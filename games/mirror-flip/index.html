@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mirror Flip</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#fff; font-family:sans-serif; overflow:hidden; }
+    .game-header { padding:0.5rem 1rem; }
+    .game-header h1 { margin:0; font-size:1.5rem; }
+    .game-header p { margin:0.2rem 0 0; font-size:0.9rem; }
+    .game-controls { margin:0.3rem 0 0; padding-left:1.2rem; font-size:0.8rem; }
+    canvas { display:block; margin:0 auto; background:#111; }
+    .game-restart { position:absolute; top:1rem; right:1rem; padding:0.4rem 0.8rem; background:#7df9ff; border:none; color:#000; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Mirror Flip</h1>
+    <p class="game-description">A dot moves forward automatically; each tap mirrors its horizontal position across the center line to dodge obstacles that appear on one side of the tunnel.</p>
+    <ul class="game-controls">
+      <li>Tap or click to mirror position</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // ----- Game constants -----
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+    const PLAYER_RADIUS = 8;
+    const OBSTACLE_RADIUS = 12;
+    const FORWARD_SPEED = 120; // pixels per second (player moves up)
+    const OBSTACLE_SPEED = 120; // same speed, moving downwards relative to player
+    const SPAWN_INTERVAL = 1.2; // seconds between obstacles
+    const SAFE_RADIUS = 200; // initial safe zone around player start
+    const MAX_DT = 0.1; // clamp to avoid spiral of death
+
+    // ----- Game state -----
+    let canvas, ctx;
+    let loopId = null;
+    let lastTime = performance.now();
+    let spawnTimer = 0;
+    let obstacles = [];
+    let score = 0;
+    let player = { x: CANVAS_W / 2, y: CANVAS_H - 80, visible: true };
+    let state = "playing"; // menu not used, start directly
+
+    // expose observable contract
+    window.__game = {
+      state: "playing",
+      score: 0,
+      player: { x: player.x, y: player.y, visible: true },
+      objective: "Tap to mirror across the center line and avoid obstacles that appear on one side of the tunnel."
+    };
+
+    // ----- Helper functions -----
+    function reset() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      // reset core variables
+      player.x = CANVAS_W / 2;
+      player.y = CANVAS_H - 80;
+      player.visible = true;
+      obstacles = [];
+      spawnTimer = 0;
+      score = 0;
+      state = "playing";
+      // reset observable
+      window.__game.state = state;
+      window.__game.score = score;
+      window.__game.player.x = player.x;
+      window.__game.player.y = player.y;
+      window.__game.player.visible = true;
+      lastTime = performance.now();
+      loopId = requestAnimationFrame(loop);
+    }
+
+    function mirrorPlayer() {
+      // mirror across vertical center line
+      player.x = CANVAS_W - player.x;
+    }
+
+    function spawnObstacle() {
+      // Choose a half (0 = left, 1 = right) randomly
+      const half = Math.random() < 0.5 ? 0 : 1;
+      const minX = half === 0 ? 0 + OBSTACLE_RADIUS : CANVAS_W / 2 + OBSTACLE_RADIUS;
+      const maxX = half === 0 ? CANVAS_W / 2 - OBSTACLE_RADIUS : CANVAS_W - OBSTACLE_RADIUS;
+      const x = minX + Math.random() * (maxX - minX);
+      // Spawn ahead of player (higher up, i.e., smaller y)
+      const y = -OBSTACLE_RADIUS; // start just above canvas
+      obstacles.push({ x, y, half });
+    }
+
+    function update(dt) {
+      if (state !== "playing") return;
+
+      // move player forward (upwards)
+      player.y -= FORWARD_SPEED * dt;
+
+      // move obstacles downwards (relative motion)
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const o = obstacles[i];
+        o.y += OBSTACLE_SPEED * dt;
+        // check collision
+        const dx = o.x - player.x;
+        const dy = o.y - player.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < (PLAYER_RADIUS + OBSTACLE_RADIUS) ** 2) {
+          gameOver();
+          return;
+        }
+        // if passed player, remove and increment score
+        if (o.y - OBSTACLE_RADIUS > player.y) {
+          obstacles.splice(i, 1);
+          score++;
+        }
+      }
+
+      // spawn logic with safe radius check
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        // try to spawn respecting safe zone
+        let attempts = 0;
+        while (attempts < 5) {
+          const prevCount = obstacles.length;
+          spawnObstacle();
+          const o = obstacles[obstacles.length - 1];
+          const dx = o.x - player.x;
+          const dy = o.y - player.y;
+          const distance = Math.hypot(dx, dy);
+          // time to reach player if moving at OBSTACLE_SPEED
+          const timeToReach = (player.y - o.y) / OBSTACLE_SPEED;
+          if (distance > SAFE_RADIUS || timeToReach > 3) {
+            break; // acceptable
+          }
+          // reject this obstacle
+          obstacles.pop();
+          attempts++;
+        }
+        spawnTimer = SPAWN_INTERVAL;
+      }
+    }
+
+    function render() {
+      // clear
+      ctx.fillStyle = "#0a0a0f";
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // draw player
+      ctx.fillStyle = "#ff00aa";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+
+      // draw obstacles
+      ctx.fillStyle = "#7df9ff";
+      for (const o of obstacles) {
+        ctx.beginPath();
+        ctx.arc(o.x, o.y, OBSTACLE_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // draw score
+      ctx.fillStyle = "#ffd23f";
+      ctx.font = "20px monospace";
+      ctx.fillText(`Score: ${score}`, 10, 30);
+
+      // game over overlay
+      if (state === "gameover") {
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.font = "30px monospace";
+        ctx.fillText("Game Over", CANVAS_W / 2, CANVAS_H / 2 - 20);
+        ctx.font = "20px monospace";
+        ctx.fillText(`Score: ${score}` , CANVAS_W / 2, CANVAS_H / 2 + 10);
+        ctx.fillText("Press R or click Restart", CANVAS_W / 2, CANVAS_H / 2 + 40);
+      }
+    }
+
+    function gameOver() {
+      state = "gameover";
+      window.__game.state = state;
+    }
+
+    function loop(now) {
+      const dt = Math.min((now - lastTime) / 1000, MAX_DT);
+      lastTime = now;
+      try {
+        if (state === "playing") update(dt);
+        render();
+        // sync observable state
+        window.__game.score = score;
+        window.__game.player.x = player.x;
+        window.__game.player.y = player.y;
+        window.__game.player.visible = true;
+      } catch (e) {
+        console.error(e);
+      }
+      loopId = requestAnimationFrame(loop);
+    }
+
+    // ----- Input handling -----
+    function init() {
+      canvas = document.getElementById('game');
+      ctx = canvas.getContext('2d');
+      // start loop
+      reset();
+    }
+
+    // mirror on click/tap
+    document.addEventListener('click', (e) => {
+      if (e.target.id === 'restart') return; // ignore restart button
+      if (state === "playing") mirrorPlayer();
+    });
+
+    // key handling
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        reset();
+      } else if (state === "playing") {
+        // any other key mirrors as well (optional)
+        mirrorPlayer();
+      }
+    });
+
+    // restart button
+    document.getElementById('restart').addEventListener('click', reset);
+
+    // start when DOM ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
