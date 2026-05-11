@@ -1,0 +1,140 @@
+We need to fix missing window.__game exposure. The game currently defines variables and loops but not exposing anything on window. So we need to set window.__game = {state:..., score:..., player:..., objective...}. Probably set at first frame before any input, i.e., inside the boot of the game.
+
+The easiest is to set it right after defining the constants: We have a "// === CONFIG" section where constants were defined originally (but now blank). Actually after editing, CONFIG block empty. We can add an initialization there or in startLoop. The requirement: set this on the very first frame, before any input.
+
+Thus we need to create a global object window.__game with properties: state (phase variable?), score (score variable), player: { x: player.x, y: player.y, visible: true? }, objective (OBJECTIVE string defined? We removed it? Let's check config. In original segment, there were constants: OBJECTIVE stored at line 35 originally, but now after removal of duplicate constants, the block has only empty lines. Wait earlier we removed the duplicate WARP constants; but OBJECTIVE? Let's search for OBJECTIVE.
+
+---
+
+The user is attempting to fix the missing window.__game in index.html.
+
+We need to expose a global variable window.__game with a shape containing state, score, player (with visible boolean), objective.
+
+This should be set on the very first frame before any input. That implies we need to set it early perhaps when reset is called or when page loads, before any input events.
+
+We have functions and state currently in index.html. There is a reset function but it's placeholder. We haven't defined __game. So we need to set up __game with defaults.
+
+Also ensure that player.visible is defined. Currently player object has radius but no visible property. We could refactor or extend __game's player property to include visible based on player existence.
+
+Simplest: create an object __game in script before anything else runs and update it in each frame (tick) to reflect current values.
+
+Specifically:
+
+Add after defining state variables (maybe after let player definition) a line:
+
+window.__game = {
+  state,
+  score,
+  player: {
+    x: player.x,
+    y: player.y,
+    visible: true // we can compute based on player position/clipping?
+  },
+  objective: "Warp the quantum dot forward to leap over obstacles."
+};
+
+But objective is a string used by meta? In index.html we removed objective earlier; but we might want to keep a const OBJECTIVE; although earlier we removed it (actually earlier after fix, we removed the OBJECTIVE const). Let's search for OBJECTIVE constant: earlier lines after config we removed them. In the current file there is no OBJECTIVE const. Section after config is empty (or we removed constants earlier). The CONFIG block originally had const OBJECTIVE = "..." maybe removed? The code currently has config comment but nothing inside. Not a problem; we can define the objective string inline. According to `meta.json`, there is a description and controls and tags, but there might also be objective stored elsewhere. The required shape mentions objective: string. So we need to provide some string, could be same as meta.json description? Or a simplified objective.
+
+We can set objective in __game to meta description maybe: "Tap to instantly warp the quantum dot forward, leaping over obstacles. Time your jumps and survive as long as possible."
+
+But we need to maintain code shape.
+
+Implementation detail:
+
+- Ensure that __game = { state, score, player: {x: player.x, y: player.y, visible: true}, objective: "Tap to instantly warp ..." } is set before any input. The first frame occurs after calling startLoop and tick; tick will compute dt and call update and render. So we can set __game right after we declare variables or at boot before startLoop.
+
+Simplest: after we declare let player etc., add window.__game = {...}. That ensures it's defined before any input events (the listeners bound earlier but that's okay). The variable window.__game will be accessible.
+
+But we need to keep this object updated as the game runs. The test likely only cares that it's defined on first frame; but could also check that it's shape is correct. It might read __game.player.visible etc. Should update each tick if values change, but for minimal solution we can set static values: state var is declared as let phase = "menu". But state property in __game is required to be state string; we could map "phase" to __game.state, but we could also directly use phase variable (since it's the same). If we include __game.state referencing phase variable, we need to keep it in sync. That can be done via get; but we can simply set __game.state = phase initially, and then later when phase changes we could update __game.state in update loop maybe. But if we set __game.state to reference phase variable directly (like assign reference), it's a primitive string; later changes to phase won't affect __game.state unless we update manually. However test may not require updates; only shape presence. But if later code uses __game.state for something else? Not needed.
+
+Better to have a function updateGameState that updates __game each frame.
+
+Approach:
+
+- Add a function syncGameState() called each tick after update and before render, to set __game.state to phase, __game.score to score, __game.player.x = player.x, __game.player.y = player.y, __game.player.visible = true perhaps. This ensures it's always up to date.
+
+- Implement __game global on boot: window.__game = { state: phase, score, player: { x: player.x, y: player.y, visible: true }, objective: "Tap to instantly warp the quantum dot forward, leaping over obstacles. Time your jumps and survive as long as possible." };
+
+There is no objective const now; we need to embed string.
+
+Also optionally define OBJECTIVE constant in config block, but not necessary.
+
+Fewer modifications:
+
+Insert after let audioCtx = null; maybe a new section // === GLOBAL GAME STATE ===.
+
+Implementation steps:
+
+- Insert lines after line 48 (audioCtx) or above in state block at line 44. Use edit tool to add new lines via apply_patch? Actually we must use edit tool which does replace; but to insert new lines we need to replace something around that location.
+
+Option: edit the line after audioCtx = null; Replace it with itself plus new lines after? The edit tool works by replacing an exact oldString with newString. We can replace a line with that line plus added code after.
+
+So locate "let audioCtx = null;" line. Replace that line with:
+
+let audioCtx = null;
+ // === GAME GLOBAL STATE ======================================================
+ window.__game = {
+   state: phase,
+   score: score,
+   player: { x: player.x, y: player.y, visible: true },
+   objective: "Tap to instantly warp the quantum dot forward, leaping over obstacles. Time your jumps and survive as long as possible."
+ };
+
+Make sure proper indentation and line breaks.
+
+We need to ensure that the code is inserted before reset function runs? It's after variable declarations but before reset() defined. That's okay because at script load time this will execute and set __game based on variables already defined: phase default "menu", score 0, player initial, etc.
+
+But note: we need to refer to player variable defined earlier? Yes, player defined at line 40. So __game can reference player.x and y.
+
+Also, the code defines window.__game object with property player.visible = true. That's fine.
+
+Potential issues: if we later modify phase, score, or player.x/y, __game won't automatically update. But maybe test only checks initial shape. Might also check that __game.objective matches description? Not specified. Anyway.
+
+If we want to update later, we can add sync call inside tick: after update and before render, we could add __game.state = phase; __game.score = score; __game.player.x = player.x; __game.player.y = player.y; __game.player.visible = true; But minimal may pass.
+
+But I think better to update each tick to ensure consistency.
+
+Add after line 119 (render()) maybe before requestAnimationFrame call.
+
+But we have try-catch; after render, we can add:
+
+__game.state = phase;
+__game.score = score;
+__game.player.x = player.x;
+__game.player.y = player.y;
+__game.player.visible = true; // always visible
+
+Add these lines inside try block after render().
+
+Implementation plan:
+
+- Replace line 119 or add after it? Let's inspect lines near tick:
+
+Lines:
+
+115: try {
+116: const dt = Math.min((now - lastTime) / 1000, 0.1);
+117: lastTime = now;
+118: update(dt);
+119: render();
+120: } catch (err) {
+121: console.error...
+
+So after render() before closing brace, we can add code lines. We'll replace "render();" line with "render();\n    // Sync global game state\n    __game.state = phase;\n    __game.score = score;\n    __game.player.x = player.x;\n    __game.player.y = player.y;\n    __game.player.visible = true;". Ensure indentation matches.
+
+So edit: find "render();" string and replace accordingly.
+
+But note: we need to reference __game variable defined globally as window.__game; but with global variable __game already defined as window.__game, we can just refer to __game.
+
+Now check that we imported the object earlier. In the insertion after audioCtx line, we need to reference phase etc. That will work.
+
+All modifications need to be done with edit tool.
+
+Let's read a snippet around audioCtx line to ensure proper context for replace.
+
+We'll read lines around audioCtx.
+
+{"filePath":"/tmp/slop-factory-work/quantum-leap-1a2c03cc/index.html","offset":44,"limit":20}
+
+---
+
