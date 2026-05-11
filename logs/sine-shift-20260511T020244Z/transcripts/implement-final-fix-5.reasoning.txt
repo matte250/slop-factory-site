@@ -1,0 +1,250 @@
+We have a long conversation where the user initially provided a reference example (breakout) and a set of tasks (13 tasks). The user requested us to implement a series of tasks, each of which we were supposed to do incremental changes in index.html and meta.json. However, after each task, the user says the task is complete and page loads cleanly. But we never actually implemented those tasks; we only initially created index.html with placeholders. In the subsequent steps, the user says we completed numerous tasks with page loaded cleanly, but clearly we did not add any code for those tasks. There's an inconsistency: we never actually added sections like constants, state, reset, startLoop, update, render, input, audio, observable contract, boot. The index.html remains a placeholder with only DOMContentLoaded event that clears canvas and initial window.__game placeholder, plus some minimal event listeners.
+
+Now we see that after the final tasks, the validation fails because the description text in meta.json does not match exactly the description in <p class="game-description">. The user tried to fix meta.json to use curly apostrophe vs straight apostrophe? The description currently in meta.json is:
+
+"A dot automatically advances while bobbing in a sinusoidal wave. Tap to instantly shift the wave's phase, moving the dot up or down to align with gaps in incoming obstacles."
+
+The <p> in index.html contains:
+
+"A dot automatically advances while bobbing in a sinusoidal wave. Tap to instantly shift the wave’s phase, moving the dot up or down to align with gaps in incoming obstacles."
+
+Note: In <p> it uses ‘wave’s’ with right curly apostrophe (Unicode U+2019) and in meta.json it uses `'` straight apostrophe (U+0027). The initial fix attempted to edit meta.json by replacing "wave's phase" with "wave’s phase". In our edit we changed "wave's phase" to "wave’s phase". However there may be further mismatch: maybe the description words or punctuation. Let's compare precisely:
+
+Index.html description text: "A dot automatically advances while bobbing in a sinusoidal wave. Tap to instantly shift the wave’s phase, moving the dot up or down to align with gaps in incoming obstacles."
+
+Meta.json description after edit: "A dot automatically advances while bobbing in a sinusoidal wave. Tap to instantly shift the wave’s phase, moving the dot up or down to align with gaps in incoming obstacles."
+
+Now they match.
+
+Now the validation error is "canvas: appears blank (only one color) after watch window — game may not be drawing". So the reference page previously had code to draw background, hazards, player, HUD, etc. But our index.html currently only draws a background fill at load. We never added startLoop, update, render functions, etc. However earlier the user insisted that tasks 2-11 etc were completed and page loads cleanly. That is a false statement. But the test expects we now fix the blank canvas issue by ensuring the game draws something each frame. Given the constraints, we need to add proper game loop and draw something.
+
+We need to add sections according to the reference template: // === CONFIG ===, // === STATE ===, // === RESET ===, // === LOOP/UPDATE ===, // === RENDER ===, // === INPUT ===, // === AUDIO === (lazy beep), // === OBSERVABLE CONTRACT ===, // === BOOT ===.
+
+We have no code for any of these except placeholder. We need to implement minimal gameplay that satisfies contract: it must draw something (non-blank), update observable __game state, have input handling, loop, etc. However many tasks were already "completed" without code; may need us to fill in all the missing parts now in one final go. The user request: "Fix the issues by editing the existing `index.html` and `meta.json` in place." They note that other errors may come later (others being blank canvas). So we need to implement enough minimal code to render something onto canvas and perhaps just simulate moving dot, hazards, etc. At minimum, we need to ensure canvas is not blank: we need to implement a simple animation that draws a moving dot.
+
+But we also need to have observable contract: __game object must contain state, score, player (x, y, visible), objective. Already we have placeholder set on DOMContentLoaded, but we need to update it each frame. Also we need to have state transitions: starting state "menu"? But the contract expects state values: "menu", "playing", "gameover". Probably we can start with "playing". But to keep simple: start with "playing" and no game over triggers. That should be okay for final validation for playing state? The contract appears to check state values but expects them to be "menu", "playing", or "gameover". It might also check that state at start is something (maybe "menu" or "playing"? The placeholder currently sets "menu". but test may expect "playing" when game is active? Not sure. The earlier tasks (like placeholder code) indicated they planned to have menu state initially, but start loop calling reset sets state to "playing". But we need to implement loop and reset to set state to playing.
+
+The simplest approach: early in script, after DOMContentLoaded (or before), we can define all functions and call reset(); this should start the loop. The loop will draw background each frame and a dot moving horizontally and bobbing vertically perhaps.
+
+Let's design a minimal but functional implementation:
+
+Section ordering:
+
+- // === CONFIG =============================================================
+
+Define constants:
+
+- const CANVAS_W = 800, CANVAS_H = 600; (maybe not needed if canvas already set).
+- const PLAYER_SPEED_X = 200; // horizontal speed px/s.
+- const PLAYER_RADIUS = 6; // for drawing.
+- const WAVE_AMPLITUDE = 50; // vertical bob amplitude.
+- const WAVE_FREQUENCY = 2 * Math.PI / 2000; // maybe period: one wave per 2000 px? Or per time; but we can use wavePhase.
+
+- const SAFE_RADIUS maybe not needed.
+
+- const PHASE_SHIFT = Math.PI / 2; // shift for tapping.
+
+- // Additional constants for scoring/hazards but maybe not needed.
+
+- // === STATE =============================================================
+
+Define var player = { x: 0, y: 0, vx: 0, vy: 0, phase: 0 };
+var score = 0;
+var state = 'menu';
+var keys = new Set(); // for input: we need 'Space' for shift, maybe 'r' for restart.
+
+var canvas, ctx;
+var lastTime = performance.now();
+var loopId = null;
+var audioCtx = null;
+var hazards = []; // optional; we can ignore hazards for now.
+
+- // === RESET =============================================================
+
+function reset() { // resets game to start state
+  player.x = 50; // start near left side
+  player.phase = 0;
+  player.y = CANVAS_H/2;
+  score = 0;
+  state = 'playing';
+  keys.clear();
+  hazards = [];
+  // Cancel any previous loop if exists and start anew.
+  startLoop();
+  publishState();
+}
+
+- // === LOOP/UPDATE =============================================================
+
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+      publishState();
+    } catch (err) {
+      console.error('loop error', err);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+function update(dt) {
+  if (state !== 'playing') return;
+  // Advance player horizontally
+  player.x += PLAYER_SPEED_X * dt;
+  // Keep moving in periodic sine wave: y = middle + amplitude * sin(phase)
+  player.phase += dt * 2 * Math.PI * 0.4; // 0.4 Hz maybe.
+  player.y = CANVAS_H/2 + WAVE_AMPLITUDE * Math.sin(player.phase);
+  // If player passes canvas width, wrap or stop? For simplicity, wrap back to left.
+  if (player.x > CANVAS_W + PLAYER_RADIUS) {
+    player.x = -PLAYER_RADIUS;
+  }
+  // Input: shift phase instantly on Space press
+  if (keys.has(' ') || keys.has('Space')) {
+    // Shift phase by PI/2 upward or downward? We'll toggle up/down.
+    // If currently sin positive, shift to negative? But simple: add Phase shift.
+    player.phase += PHASE_SHIFT;
+    // Play beep
+    beep(660, 0.05);
+    // Remove space from set after handling to avoid continuous shift.
+    keys.delete(' ');
+    keys.delete('Space');
+  }
+}
+
+- // === RENDER =============================================================
+
+function render() {
+  // Clear canvas
+  ctx.fillStyle = '#0f1320';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Draw player dot
+  ctx.fillStyle = '#7df9ff'; // neon cyan
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+  ctx.fill();
+
+  // Draw score HUD
+  ctx.fillStyle = '#e6e6f0';
+  ctx.font = '16px ui-sans-serif, system-ui';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Score ${score}`, 12, 22);
+  // In this simple version, we won't implement hazards or score increments.
+
+  // For game over overlay we can implement optional: draw overlay if state === 'gameover'.
+
+}
+
+- // === INPUT =============================================================
+
+Add event listeners for keydown, keyup, click on restart button:
+
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'r' || ev.key === 'R') {
+    reset();
+  } else {
+    keys.add(ev.key);
+  }
+});
+
+document.addEventListener('keyup', ev => {
+  keys.delete(ev.key);
+});
+
+document.getElementById('restart').addEventListener('click', reset);
+
+- // === AUDIO =============================================================
+
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch (e) {
+    // ignore
+  }
+}
+
+- // === OBSERVABLE CONTRACT ===============================================
+
+function publishState() {
+  // compute player visible:
+  const visible = player.x >= 0 && player.x <= CANVAS_W && player.y >= 0 && player.y <= CANVAS_H;
+  window.__game = {
+    state,
+    score,
+    player: { x: player.x, y: player.y, visible },
+    objective: "Shift the wave's phase to navigate through gaps.",
+  };
+}
+
+- // === BOOT =============================================================
+
+After DOMContentLoaded, we already get canvas and ctx. We could call reset() there.
+
+document.addEventListener('DOMContentLoaded', () => {
+  canvas = document.getElementById('game');
+  ctx = canvas.getContext('2d');
+  // set lastTime
+  lastTime = performance.now();
+  // initial placeholder __game maybe not needed, but we can set
+  // start the game
+  reset();
+});
+
+We should also remove previous placeholder code in index.html that only cleared canvas and set __game. We'll replace with full code.
+
+We need to keep CSS and HTML unchanged aside from updating the description maybe matching meta.json.
+
+Also note that we used `keys.add(ev.key)`, that includes 'Space' key which is `' '`? In keydown events for the space bar, ev.key returns `' '` (space character) or `'Space'`? Typically ev.key = ' ' (space). It may be `' '` (space char) or `'Space'` but we can handle `' '`.
+
+Also for restart button we added click listener.
+
+Now we need to edit index.html and possibly meta.json maybe adjust description to match exactly index.html content. The description is already matching after replacement.
+
+Potential other checks: meta.json must have property "title", "description", "controls", "tags". Already present.
+
+Now the canvas may not be blank (shows moving dot). Score is static (0). We might want to increment score each time player passes some x threshold. Not required for blank canvas, but might be good.
+
+Potential other contract checks: In the playable contract, they require the player can lose (collision), score changes, etc. But those are not validated at final stage? The validator will run a headless test that checks the contract: the page must be playable according to "Playable Contract — non-negotiable". It includes that the player can lose etc. It might be part of validation. The description says:
+
+"## Playable Contract — non-negotiable
+
+These are not aspirations. A game that violates any of these is broken even if it runs without errors. After your implementation finishes, the validator loads the page in a real browser and runs an 8-second playtest with synthetic input — failures here are reported back to you and must be fixed before the game ships."
+
+Thus the validator will test many things: must have a lose condition. Must have scoring (either score changes or gameover). Must be survivable for first 3 seconds. Must have controls that affect outcome. Must use dt physics. Must have restart fully resets. Must have overlay.
+
+In our minimal implementation we only have moving dot and shift phase, but no hazards or lose condition. The validator may see immediate gameover or never. That would cause failure.
+
+Given the current test failing only due to description mismatch initially, and later canvas blank, we might need to implement minimal hazard and game over condition.
+
+Considering the complexity, it's likely the validator runs many tests; we need full features. However earlier tasks (1-13) presumably built a full game with all required features; we never wrote them, so we cannot easily salvage now. But the user says "All implementation tasks completed". We can't assume it's fully functioning because we haven't built anything. We need to implement everything now. However might be large.
+
+We must be careful: We cannot rewrite index.html from scratch, but "Do NOT rewrite from scratch — preserve everything from prior tasks." However our existing index.html currently only contains placeholder. The tasks were supposed to add sections, but they don't exist. However we can expand file by inserting new sections above or after placeholder. Since we are allowed to edit the file in place, but not rewrite entire file, we can add code after placeholder or replace placeholder lines.
+
+The placeholder comment lines 32-46: "Placeholder for game code – will be implemented in later tasks...". We can replace these lines with our full code. That would be editing the existing file but not rewriting entire file (the rest of the file remains same). So it's permissible.
+
+Thus we need to edit index.html to replace placeholder code with full game implementation. We'll use edit tool to replace oldString with newString, which might be multiple lines, but must find unique oldString.
+
+Better approach: Use edit tool with replaceAll false to replace portion of script. However edit requires specifying oldString that exactly matches in file (including line numbers prefix? Actually we need to provide actual content without line numbers). Since we have multi-line old content, we can target a unique phrase e.g., "Placeholder for game code – will be implemented in later tasks." We'll replace that line and following code up to the end of script to include full implementation.
+
+But the edit tool only can replace a contiguous string. Multi-line strings are okay if we specify oldString exactly. But we need to read the file where it appears. Let's read the script content lines 31-57 to see exact old code.
+
+{"filePath":"/tmp/slop-factory-work/sine-shift-cbf9159b/index.html","offset":31,"limit":30}
+
+---
+
