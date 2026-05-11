@@ -1,0 +1,143 @@
+We have a series of steps: The user is doing iterative validation, and after iteration 5 we need to fix validation error: page.evaluate stalled or threw: validate.browser.evaluate exceeded deadline of 10000ms.
+
+So the validation script (some code) attempts to evaluate something in the browser to check certain things and times out. This suggests the page may be stuck in an infinite loop or heavy computation that blocks the evaluation. The typical cause could be that the startLoop or update is causing a busy loop that runs indefinitely without pause? Actually, startLoop uses requestAnimationFrame, which is okay, but if we have some infinite loop inside update perhaps? Let's examine code further. The code currently only has config, state, reset, startLoop, update (horizontal scroll, gravity, vertical, clamping). Should be fine. There's also input handling and helpers, and boot.
+
+We added player drawing. Should be okay.
+
+Now the error: page.evaluate stalled or threw: validate.browser.evaluate exceeded deadline of 10000ms. Possibly the validation expects __game object to be defined (Observable contract) and other tasks maybe not fully implemented, causing the evaluate code to hang.
+
+Looking at tasks: Step 11 added window.__game each frame. Did we implement that? Not yet. Possibly missing window.__game and causing validation script to wait for an object not defined. But the error is a stall, possibly infinite loop in evaluate: maybe the validation script tries to poll __game until set, but no object leads to infinite, causing TTL exceed.
+
+Alternatively maybe a syntax error causing evaluation to hang? Let's read further parts of the file lines beyond 137 (there might be more code for __game). We haven't read below 137. Let's read further lines.
+
+
+---
+
+The user has been iteratively fixing tasks, but now validation fails with "page.evaluate stalled or threw: validate.browser.evaluate exceeded deadline of 10000ms".
+
+We must figure out why this is happening. Likely some infinite loop or heavy computation causing the page script to never finish or hang. Let's examine the code.
+
+Open the entire index.html file.
+
+---
+
+We need to resolve validation errors: "page.evaluate stalled or threw: validate.browser.evaluate exceeded deadline of 10000ms". That likely means some infinite loop or heavy computation causing script to be blocked for >10s. In this implementation, perhaps the loop is running too fast? But we have requestAnimationFrame loop with dt capped. Could be that startLoop is starting an infinite recursion due to missing guard? No, requestAnimationFrame should be okay. Perhaps the code loads but never stops, causing evaluation to stall while waiting for something like checking some value? Also there may be missing observable contract which expects certain fields, but currently not defined. But worst-case cause: The update loop simply moves player.x and y, but there is no termination; but that's expected. However page.evaluate might be trying to evaluate the page state and hitting some unresponsive code. What is validate.browser.evaluate likely? Usually they call something like `await page.evaluate(() => window.__game)`. If __game variable does not exist or there's something causing infinite loops inside evaluate, but evaluating window.__game is just reading a variable; not problematic.
+
+But we haven't defined window.__game observable contract. Some previous tasks (task 11) likely required populating window.__game each frame. We haven't done that; currently no __game variable. The validation may try to read it and then loops waiting for it? Actually they might be evaluating a function that expects __game to exist and to exist proper structure. If __game is undefined, maybe they'd try to catch error? Hmm.
+
+But the validation error specifically "page.evaluate stalled or threw: validate.browser.evaluate exceeded deadline of 10000ms". That implies the evaluate call timed out, maybe because the page is hung (CPU intensive) or waiting on something like requestAnimationFrame infinite loop? But that is normal; but evaluate can still be called while the page is running. Usually evaluate call is separate and returns quickly regardless of animation frames. Could there be an infinite recompute due to some bug causing requestAnimationFrame to cause exception each frame? That might produce errors and cause the evaluation to block? When an exception thrown in tick, they catch console.error and continue; that shouldn't block.
+
+Maybe missing semicolon in render causing it to be attached incorrectly? I saw that after render function, there's `function render() { ... }` and then next line is a blank then comment: `// === INPUT`. That's fine.
+
+Potential hang: In startLoop, they start loopId = requestAnimationFrame(tick), then tick calls requestAnimationFrame(tick) each time. That's fine.
+
+Actually I see a potential issue: The render implements drawing of player and stuff. That is fine.
+
+But the validation may also require that `window.__game.state` be something like "menu" initially or after start, not undefined. So they may evaluate something like `window.__game.state` and then wait for some event. But our page doesn't define __game. That may cause evaluate to error: read of undefined property? Actually `window.__game` is undefined, then checking `.state` will cause TypeError. If they evaluate a code like:
+
+```js
+await page.evaluate(() => {
+  // maybe return window.__game && window.__game.state;
+});
+```
+
+If they do `window.__game.state`, that'll cause error causing evaluate to throw; but that error would be immediate, not stall for 10 seconds. But maybe they loop waiting for __game to become defined? E.g., they poll window.__game until not undefined, but because it's never defined, they wait 10 seconds, then timeout. That would cause stalled error. So we need to define __game and update it each frame. This is task 11, which we didn't implement yet. The user took us through tasks 1-12, but maybe we missed some steps. However we might have missed some code for that. Indeed, scanning index.html, I see no __game. So we need to add the observable contract section, likely under a // === OBSERVABLE SECTION maybe not preexisting. Look at the existing sections: we have CONFIG, STATE, LOOP, UPDATE, RENDER, INPUT, HELPERS, BOOT. No "OBSERVABLE". We need to add code that each frame (maybe at the end of render or after update) sets `window.__game = { state, score, player: { x, y, visible }, objective: 'Fly through the gaps' }` etc. Must be exactly in the appropriate block - we need to decide where to put it. Possibly they have section // === OBSERVABLE ??? Not present. But we can add new section comment. It says keep additions in the appropriate // === SECTION === block from existing structure. Since there's no existing block for observable, we can create a new block probably called // === OBSERVABLE =============================================================. That should be okay. However they asked earlier to "populate window.__game each frame". Could be in // === UPDATE or // === RENDER that runs each frame.
+
+We need to define state: it should be "playing", "gameover", or maybe "menu" for initial state? The page starts playing right away after reset sets phase = 'playing'; no menu start. So we can set state based on phase variable: if phase is 'playing', __game.state = 'playing'; else 'gameover'.
+
+Better ensure __game stays defined: add `window.__game = window.__game || {};` and then update.
+
+Add after render or perhaps at the start of render.
+
+Potential performance: we call each frame.
+
+Now fix rendering of hazards and HUD? Not required for now.
+
+Also, we need method to handle hazards, but not needed for showing something. Anyway we need to implement __game to avoid validation stall.
+
+We also need likely other issues: The index.html's player drawing may be okay.
+
+Now check hazard system: container is empty, but might cause collision detection to never trigger etc. That's okay.
+
+But maybe __game also needs player.visible. In earlier tasks they might have required to set visible property to true when player within visible area. We'll just set visible = true always (as player always visible). OK.
+
+Now implement __game contract.
+
+Also ensure that the state values are exactly 'menu', 'playing', 'gameover'.
+
+Our game has initial 'playing', and when game over maybe set phase = 'gameover'. We used 'lost', but we also have phase set as 'playing' currently, and from collision detection we haven't defined but expected to set phase to 'gameover' or 'lost'. In code we have check for gameover overlay with `if (phase === 'gameover' || phase === 'lost')`. So state could be one of those. The observable contract expects 'gameover', not 'lost' maybe. We can set __game.state accordingly: if phase contains 'gameover' or 'lost', we assign 'gameover'.
+
+But maybe we haven't implemented collision detection yet; we left TODO. For now we can map purely based on phase.
+
+We also need to ensure __game gets defined before usage (at boot). We'll add an init in BOOT after reset/startLoop, but they want per-frame update.
+
+Simplest: after `render()` call in tick, we can update __game. Let's modify tick: after render() call, add `publishState()` maybe something like that? Not defined. So we can just call a new function `publishGameState()` that sets window.__game. Or we can directly add after render().
+
+Let's edit startLoop tick: after render() we can add code:
+
+```
+window.__game = {
+  state: (phase === 'playing') ? 'playing' : 'gameover',
+  score,
+  player: { x: player.x, y: player.y, visible: true },
+  objective: 'Navigate through the pipes'
+};
+```
+
+But we need to add inside try block. So modify tick function accordingly.
+
+But need to consider that we used `// === LOOP` block; we can modify that.
+
+Let's use edit tool to modify inside startLoop, e.g., add after render() line.
+
+Find `render();` line inside tick function. That's line 74.
+
+We'll replace entire snippet? Probably we should edit around line 73-75 to add after render; but we need to find the exact portion.
+
+Current code snippet:
+
+```
+70:         try {
+71:           const dt = Math.min((now - lastTime) / 1000, 0.1);
+72:           lastTime = now;
+73:           update(dt);
+74:           render();
+75:         } catch (err) {
+```
+
+We'll edit to:
+
+```
+73:           update(dt);
+74:           render();
+75:           // Update observable game state
+76:           window.__game = {
+77:             state: phase === 'playing' ? 'playing' : 'gameover',
+78:             score,
+79:             player: { x: player.x, y: player.y, visible: true },
+80:             objective: 'Fly through the gaps'
+81:           };
+```
+
+We need to add new lines after render. Ensure we adjust line numbers accordingly.
+
+But editing oldString must be unique. We'll match oldString containing lines 70-75 maybe.
+
+Simplify: replace `render();` line with itself plus following lines.
+
+We can match oldString spanning two lines: `render();` plus maybe newline. But we need more context.
+
+Better to replace portion with a longer oldString that includes until `} catch`. But that could be ambiguous.
+
+Alternatively, add separate edit after line 74 using `edit` by inserting new lines? The edit tool replaces exact string; cannot insert at arbitrary. Could replace `render();` with `render();\n    // Update observable game state\n    window.__game = {...};`
+
+Yes, replace exactly the line `render();` (including indentation) with that same plus added lines.
+
+Check indentation: line 74 is `           render();`
+
+Specifically, content: `           render();` (with spaces). Let's copy that with spaces (maybe 12 spaces before render?). Let's check the line content representation. In listing, line 74 begins with 12 spaces: at column maybe 12. Actually from line numbers: line 71 is `const dt = ...`, line 72 `lastTime = now;`, line 73 `update(dt);` line 74 `render();`. Indentation likely 12 spaces (maybe 12?). In the file view, we see preceding spaces but not exact count. We can open line snippet to see whitespace.
+
+Let's read lines 70-76 with raw series to see indentation.{"filePath":"/tmp/slop-factory-work/flap-glide-7ca12a5e/index.html","offset":70,"limit":10}
+
+---
+
