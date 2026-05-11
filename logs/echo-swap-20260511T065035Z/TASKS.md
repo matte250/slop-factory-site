@@ -1,0 +1,13 @@
+1. HTML scaffold + meta.json — create `index.html` with required header, description, controls list, canvas (800×600), restart button, empty `<script>` block, and create `meta.json` matching the header text and controls.
+2. Game state objects — define player object (x:400, y:300, vx:0, vy:0, radius:10), hazards array, score variable, phase string, constants `SAFE_RADIUS=200`, `MAX_SPEED=300` (px/s), and other needed values at top of script.
+3. requestAnimationFrame loop — implement `startLoop()` with `cancelAnimationFrame` discipline, `loopId` tracking, `dt` calculation (clamp to 0.1 s), `try/catch` wrapper, calling `update(dt)` and `render()` each frame, and initial `requestAnimationFrame(startLoop)`.
+4. Input handling — add a `keys` Set, `keydown`/`keyup` listeners for arrow keys (movement) and `R` (restart), plus click listener on `#restart` button; both call a common `reset()` function.
+5. Player movement — in `update(dt)` apply acceleration (600 px/s²) when arrow keys are held, apply friction (0.9 factor), cap speed at `MAX_SPEED`, update position with `dt`, and clamp to canvas bounds.
+6. Hazard spawning — implement spawn timer (e.g., every 1.0 s) that creates hazard objects with random positions outside `SAFE_RADIUS` of player and ensures they cannot reach the player within 3 s at speed `200 px/s`; add to hazards array.
+7. Hazard motion — each frame move hazards according to their velocity (scaled by `dt`), using a simple linear motion pattern.
+8. Collision detection — detect when distance between player and any hazard < sum of radii; on hit set `phase="gameover"`, stop the active gameplay loop.
+9. Score handling — increase `score` on discrete events (e.g., each hazard that passes the player without collision), and render the numeric score in the top‑left corner of the canvas.
+10. Rendering — clear canvas, draw background, draw hazards, draw player (high‑contrast neon), and draw HUD elements (score, etc.). Ensure player is the brightest object.
+11. Game‑over overlay — dim the background, draw "Game Over", final score, and "Press R or click Restart" text on the canvas.
+12. Observable contract — each frame assign `window.__game = { state: phase, score, player: { x: player.x, y: player.y, visible: true }, objective: "Swap the dot with its delayed echo to bypass obstacles." }`.
+13. Audio — lazily create an `AudioContext` in a `beep()` helper, wrap calls in `try/catch`, and play distinct tones on hit, score increment, and death events.
