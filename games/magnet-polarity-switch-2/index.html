@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Magnet Polarity Switch</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Magnet Polarity Switch</h1>
+    <p class="game-description">Tap to flip the dot's magnetic polarity; opposing obstacles are repelled while like‑charged ones are attracted, letting you clear or create gaps on the fly.</p>
+    <ul class="game-controls">
+      <li>Tap or click to flip polarity</li>
+      <li>Press R or click Restart to restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+
+  const W = 800, H = 600;
+
+  // === STATE =============================================================
+
+  // Game objects
+  const player = {
+    x: W / 2,
+    y: H / 2,
+    polarity: 1, // 1 = north, -1 = south
+    visible: true,
+  };
+  const hazards = []; // array of obstacle objects
+  let score = 0;
+  let phase = "playing"; // "playing" | "gameover"
+
+  // Runtime helpers
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const restartBtn = document.getElementById("restart");
+  let keys = new Set();
+  let lastTime = performance.now();
+  let loopId = null;
+  let audioCtx = null;
+
+  // === RESET =============================================================
+  function reset() {
+    player.x = W / 2;
+    player.y = H / 2;
+    player.polarity = 1;
+    player.visible = true;
+    hazards.length = 0;
+    score = 0;
+    phase = "playing";
+    keys.clear();
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP / UPDATE =====================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error("loop error", err);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  function update(dt) {
+    // Placeholder for game logic
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = "#05050c";
+    ctx.fillRect(0, 0, W, H);
+    // Draw player as a simple circle
+    ctx.fillStyle = player.polarity > 0 ? "#7df9ff" : "#ff00aa";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    // Draw score
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "16px ui-sans-serif, system-ui";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score ${score}`, 12, 22);
+    // Game over overlay
+    if (phase === "gameover") {
+      ctx.fillStyle = "rgba(5,5,12,0.65)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.font = "44px ui-sans-serif, system-ui";
+      ctx.fillStyle = "#ff52ae";
+      ctx.fillText("Game Over", W / 2, H / 2 - 20);
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "20px ui-sans-serif, system-ui";
+      ctx.fillText(`Final score ${score}`, W / 2, H / 2 + 14);
+      ctx.fillStyle = "#a5a5b8";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.fillText("Press R or click Restart", W / 2, H / 2 + 42);
+    }
+  }
+
+  // === INPUT ==============================================================
+// Set up key handling and restart functionality
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "r" || ev.key === "R") { reset(); return; }
+    if (ev.key === " " || ev.key === "Space") {
+      player.polarity *= -1;
+      ev.preventDefault();
+    }
+    keys.add(ev.key);
+  });
+  document.addEventListener("keyup", (ev) => {
+    keys.delete(ev.key);
+  });
+  canvas.addEventListener("click", () => {
+    player.polarity *= -1;
+  });
+  restartBtn.addEventListener("click", reset);
+
+  // === AUDIO (lazy) ======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ================================================
+  function publishState() {
+    window.__game = {
+      state: phase,
+      score,
+      player: {
+        x: player.x,
+        y: player.y,
+        visible: player.x >= 0 && player.x < W && player.y >= 0 && player.y < H,
+      },
+      objective: "Flip polarity to repel or attract obstacles, creating safe gaps to progress.",
+    };
+  }
+
+  // === BOOT ==============================================================
+  reset();
+  </script>
+</body>
+</html>
