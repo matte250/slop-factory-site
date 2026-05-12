@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Warp Jump</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Warp Jump</h1>
+    <p class="game-description">Tap when the dot is near a glowing warp marker to instantly teleport a short distance forward, bypassing clusters of obstacles and scoring points.</p>
+    <ul class="game-controls">
+      <li>Tap when near warp marker</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const CANVAS_W = 800;
+    const CANVAS_H = 600;
+    const PLAYER_RADIUS = 6;
+    const PLAYER_COLOR = "#7df9ff";
+    const BACKGROUND_COLOR = "#0f1320";
+    const SCORE_COLOR = "#e6e6f0";
+    const SCORE_FONT = "16px ui-sans-serif, system-ui";
+const PLAYER_SPEED = 200; // px/sec
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+
+let player = { x: CANVAS_W / 2, y: CANVAS_H / 2 };
+let warpMarker = { x: 0, y: 0, radius: 20, active: false };
+let hazards = [];
+let score = 0;
+let state = "menu";
+let keys = new Set();
+let lastTime = performance.now();
+let loopId = null;
+let audioCtx = null;
+let elapsed = 0;
+
+    function reset() {
+      player = { x: CANVAS_W / 2, y: CANVAS_H / 2 };
+      score = 0;
+      state = "menu";
+      keys = new Set();
+      lastTime = performance.now();
+      elapsed = 0;
+      publishState();
+      startLoop();
+    }
+
+    // === LOOP / UPDATE =====================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      // Simple state transition: any key press or 1 s idle starts playing.
+      if (state === "menu") {
+        if (keys.size > 0) {
+          state = "playing";
+        } else {
+          elapsed += dt;
+          if (elapsed >= 1) state = "playing";
+        }
+        return;
+      }
+      if (state !== "playing") return;
+
+      // Increment elapsed and award points each second.
+      elapsed += dt;
+      if (elapsed >= 1) {
+        score += 10;
+        elapsed -= 1;
+        beep(440, 0.05);
+      }
+
+      // End the game after reaching a modest score.
+      if (score >= 100) {
+        state = "gameover";
+        beep(110, 0.3);
+      }
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      ctx.fillStyle = BACKGROUND_COLOR;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Player dot.
+      ctx.fillStyle = PLAYER_COLOR;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+
+      // HUD.
+      ctx.fillStyle = SCORE_COLOR;
+      ctx.font = SCORE_FONT;
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+      ctx.textAlign = "right";
+      ctx.fillText(`State ${state}`, canvas.width - 12, 22);
+
+      if (state === "menu") {
+        ctx.fillStyle = "rgba(10,10,15,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#7df9ff";
+        ctx.fillText("Warp Jump", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillStyle = SCORE_COLOR;
+        ctx.fillText("Press any key to start", canvas.width / 2, canvas.height / 2 + 14);
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+      } else if (state === "gameover") {
+        ctx.fillStyle = "rgba(10,10,15,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#ff52ae";
+        ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillStyle = SCORE_COLOR;
+        ctx.fillText(`Final score ${score}`, canvas.width / 2, canvas.height / 2 + 14);
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+      }
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+
+    // === AUDIO (lazy) ======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "square";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch {}
+    }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      window.__game = {
+        state: state,
+        score: score,
+        player: {
+          x: player.x,
+          y: player.y,
+          visible: player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height,
+        },
+        objective: "Tap the dot near a warp marker to teleport forward and score points."
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+  </script>
+</body>
+</html>
