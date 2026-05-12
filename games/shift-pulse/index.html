@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Shift Pulse</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Shift Pulse</h1>
+    <p class="game-description">Tap to emit a radial pulse that pushes surrounding obstacles sideways, carving a temporary clear lane for the auto‑advancing dot while obstacles slide back into place after a brief cooldown.</p>
+    <ul class="game-controls">
+      <li>Click or tap to emit pulse</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const W = 800, H = 600;
+    const PLAYER_RADIUS = 8;
+    const PLAYER_ACCEL = 600; // px/s^2
+    const PLAYER_MAX_SPEED = 300; // px/s
+    const PLAYER_FRICTION = 0.9; // per second decay factor
+    const HAZARD_RADIUS = 12;
+    const HAZARD_SPEED = 150; // px/s leftwards
+    const SAFE_RADIUS = 150; // avoid spawning near player at start
+    const SPAWN_INTERVAL = 2.0; // seconds between hazards
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+
+    let player;        // { x, y, vx, vy, radius, alive }
+    let hazards;      // array of { x, y, vx, vy, radius }
+    let score;
+    let phase;        // "playing" | "gameover"
+    let keys;
+    let lastTime;
+    let loopId = null;
+    let spawnTimer = 0;
+    let audioCtx = null;
+
+    // === RESET ==============================================================
+    function reset() {
+      player = { x: W * 0.2, y: H / 2, vx: 0, vy: 0, radius: PLAYER_RADIUS, alive: true };
+      hazards = [];
+      score = 0;
+      phase = "playing";
+      keys = new Set();
+      spawnTimer = SPAWN_INTERVAL;
+      lastTime = performance.now();
+      publishState();
+      startLoop();
+    }
+
+    // === LOOP/UPDATE =========================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      if (phase !== "playing") return;
+
+      // Player input
+      let ax = 0, ay = 0;
+      if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) ax -= PLAYER_ACCEL;
+      if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) ax += PLAYER_ACCEL;
+      if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) ay -= PLAYER_ACCEL;
+      if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) ay += PLAYER_ACCEL;
+
+      player.vx = (player.vx || 0) + ax * dt;
+      player.vy = (player.vy || 0) + ay * dt;
+
+      // Apply friction
+      const friction = Math.pow(PLAYER_FRICTION, dt);
+      player.vx *= friction;
+      player.vy *= friction;
+
+      // Clamp speed
+      const speed = Math.hypot(player.vx, player.vy);
+      if (speed > PLAYER_MAX_SPEED) {
+        const scale = PLAYER_MAX_SPEED / speed;
+        player.vx *= scale;
+        player.vy *= scale;
+      }
+
+      // Move player inside canvas bounds
+      player.x = Math.max(player.radius, Math.min(W - player.radius, player.x + player.vx * dt));
+      player.y = Math.max(player.radius, Math.min(H - player.radius, player.y + player.vy * dt));
+
+      // Hazards movement
+      for (const h of hazards) {
+        h.x += h.vx * dt;
+        h.y += h.vy * dt;
+      }
+
+      // Remove off‑screen hazards and increment score
+      const remaining = [];
+      for (const h of hazards) {
+        if (h.x + h.radius < 0 || h.x - h.radius > W || h.y + h.radius < 0 || h.y - h.radius > H) {
+          // hazard left the screen – count as survived
+          score += 1;
+        } else {
+          remaining.push(h);
+        }
+      }
+      hazards = remaining;
+
+      // Spawn new hazards
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnHazard();
+        spawnTimer = SPAWN_INTERVAL;
+      }
+
+      // Collision detection
+      for (const h of hazards) {
+        const dist = Math.hypot(h.x - player.x, h.y - player.y);
+        if (dist < h.radius + player.radius) {
+          phase = "gameover";
+          // stop the loop
+          if (loopId !== null) cancelAnimationFrame(loopId);
+          break;
+        }
+      }
+    }
+
+    function spawnHazard() {
+      // spawn at right edge, random y, respecting safe radius
+      let attempts = 0;
+      const x = W + HAZARD_RADIUS;
+      let y;
+      do {
+        y = Math.random() * (H - 2 * HAZARD_RADIUS) + HAZARD_RADIUS;
+        attempts++;
+      } while (Math.hypot(x - player.x, y - player.y) < SAFE_RADIUS && attempts < 30);
+      hazards.push({ x, y, vx: -HAZARD_SPEED, vy: 0, radius: HAZARD_RADIUS });
+    }
+
+    // === RENDER ==============================================================
+    function render() { // Render background, hazards, player, HUD
+      // Clear canvas
+      ctx.fillStyle = "#05050c";
+      ctx.fillRect(0, 0, W, H);
+
+      // Hazards
+      ctx.fillStyle = "#ff5555";
+      for (const h of hazards) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Player
+      if (player.alive && phase === "playing") {
+        ctx.fillStyle = "#7df9ff";
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // HUD – score
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+
+      // Game over overlay
+      if (phase === "gameover") { // Game over overlay: dim scene and show messages
+        ctx.fillStyle = "rgba(5,5,12,0.65)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#ff52ae";
+        ctx.fillText("Game Over", W / 2, H / 2 - 20);
+        ctx.fillStyle = "#e6e6f0";
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillText(`Final score ${score}`, W / 2, H / 2 + 14);
+        ctx.fillStyle = "#a5a5b8";
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillText("Press R or click Restart", W / 2, H / 2 + 42);
+      }
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+
+    // === AUDIO (lazy) =======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch {}
+    }
+
+    // === OBSERVABLE CONTRACT ================================================
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score,
+        player: {
+          x: player.x,
+          y: player.y,
+          // player is always within canvas bounds while playing
+          visible: player.x >= 0 && player.x < W && player.y >= 0 && player.y < H,
+        },
+        objective: "Emit a pulse to clear a lane for the moving dot while obstacles slide back.",
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+  </script>
+</body>
+</html>
