@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chrono Skip</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Chrono Skip</h1>
+    <p class="game-description">Tap to create a short time‑slip that instantly moves the dot forward while the tunnel continues scrolling, with a cooldown to force strategic timing.</p>
+    <ul class="game-controls">
+      <li>Tap or click to time‑slip</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const W = 800, H = 600;
+    const PLAYER_R = 8;
+    const PLAYER_X = 200; // Fixed X screen position
+    const VERT_SPEED = 300; // vertical speed (px/sec)
+    const FORWARD_SPEED = 200; // world forward scroll speed (px/sec)
+    const SLIP_DISTANCE = 150; // distance added on time‑slip
+    const SLIP_COOLDOWN = 1.0; // seconds
+    const HAZARD_W = 30, HAZARD_H = 60;
+    const HAZARD_SPAWN_INTERVAL = 1.0; // seconds
+    const SAFE_RADIUS_AT_SPAWN = 120;
+    const SCORE_PER_HAZARD = 10;
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+
+    let player = { y: H / 2, vy: 0 };
+    let hazards = [];
+    let score = 0;
+    let highScore = 0;
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+    let slipCooldown = 0;
+    let slipRequested = false;
+    let keys = new Set();
+    let lastTime = performance.now();
+    let loopId = null;
+    let audioCtx = null;
+    let distance = 0; // total forward distance traveled
+    let spawnTimer = 0;
+
+    function reset() {
+      player.y = H / 2;
+      player.vy = 0;
+      hazards = [];
+      score = 0;
+      phase = "playing";
+      slipCooldown = 0;
+      slipRequested = false;
+      keys.clear();
+      distance = 0;
+      spawnTimer = 0;
+      lastTime = performance.now();
+      publishState();
+      startLoop();
+    }
+
+    // === LOOP / UPDATE =====================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function spawnHazard() {
+      const worldX = distance + W + Math.random() * 200;
+      const y = HAZARD_H / 2 + Math.random() * (H - HAZARD_H);
+      const playerWorldX = distance + PLAYER_X;
+      const dx = worldX - playerWorldX;
+      if (Math.abs(dx) < SAFE_RADIUS_AT_SPAWN) return;
+      hazards.push({ worldX, y });
+    }
+
+    function update(dt) {
+      if (phase !== "playing") return;
+      distance += FORWARD_SPEED * dt;
+      slipCooldown = Math.max(0, slipCooldown - dt);
+      let move = 0;
+      if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) move -= 1;
+      if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) move += 1;
+      player.vy = move * VERT_SPEED;
+      player.y += player.vy * dt;
+      if (player.y < PLAYER_R) player.y = PLAYER_R;
+      if (player.y > H - PLAYER_R) player.y = H - PLAYER_R;
+      if (slipRequested && slipCooldown <= 0) {
+        distance += SLIP_DISTANCE;
+        slipCooldown = SLIP_COOLDOWN;
+        beep(800, 0.08);
+        slipRequested = false;
+      } else {
+        slipRequested = false;
+      }
+      spawnTimer -= dt;
+      while (spawnTimer <= 0) {
+        spawnHazard();
+        spawnTimer += HAZARD_SPAWN_INTERVAL;
+      }
+      for (let i = hazards.length - 1; i >= 0; i--) {
+        const h = hazards[i];
+        const screenX = h.worldX - distance;
+        const dx = screenX - PLAYER_X;
+        const dy = h.y - player.y;
+        const rectHalfW = HAZARD_W / 2 + PLAYER_R;
+        const rectHalfH = HAZARD_H / 2 + PLAYER_R;
+        if (Math.abs(dx) < rectHalfW && Math.abs(dy) < rectHalfH) {
+          phase = "gameover";
+          if (score > highScore) highScore = score;
+          beep(110, 0.3);
+          break;
+        }
+        if (screenX + HAZARD_W / 2 < 0) {
+          hazards.splice(i, 1);
+          score += SCORE_PER_HAZARD;
+          beep(440, 0.04);
+        }
+      }
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      ctx.fillStyle = "#05050c";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#ff5252";
+      for (const h of hazards) {
+        const screenX = h.worldX - distance;
+        ctx.fillRect(screenX - HAZARD_W / 2, h.y - HAZARD_H / 2, HAZARD_W, HAZARD_H);
+      }
+      ctx.fillStyle = "#7df9ff";
+      ctx.beginPath();
+      ctx.arc(PLAYER_X, player.y, PLAYER_R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+      if (phase === "gameover") {
+        ctx.fillStyle = "rgba(5,5,12,0.65)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#ff52ae";
+        ctx.fillText("Game Over", W/2, H/2 - 20);
+        ctx.fillStyle = "#e6e6f0";
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillText(`Final score ${score}`, W/2, H/2 + 14);
+        ctx.fillStyle = "#a5a5b8";
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillText("Press R or click Restart", W/2, H/2 + 42);
+      }
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") { reset(); return; }
+      if (ev.key === " " || ev.key === "Space") { slipRequested = true; ev.preventDefault(); }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+    canvas.addEventListener("click", () => { slipRequested = true; });
+
+    // === AUDIO (lazy) ======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch {}
+    }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score,
+        player: { x: PLAYER_X, y: player.y, visible: player.y >= 0 && player.y < H },
+        objective: "Advance the dot forward through a scrolling tunnel, using time‑slips strategically."
+      };
+    }
+
+    // === BOOT ===============================================================
+    function publishInitialState() {
+      window.__game = {
+        state: "menu",
+        score: 0,
+        player: { x: PLAYER_X, y: H/2, visible: true },
+        objective: "Tap to create a time‑slip that moves the dot forward while the tunnel scrolls."
+      };
+    }
+    publishInitialState();
+    reset();
+  </script>
+</body>
+</html>
