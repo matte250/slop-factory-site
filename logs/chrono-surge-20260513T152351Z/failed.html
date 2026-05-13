@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chrono Surge</title>
+  <style>
+    body {margin:0;background:#0a0a0f;color:#e6e6f0;font-family:ui-sans-serif,system-ui,sans-serif;}
+    .game-header {padding:12px 16px;border-bottom:1px solid #1d1d2a;}
+    .game-header h1 {margin:0;font-size:18px;color:#7df9ff;}
+    .game-header .game-description {margin:4px 0;color:#a5a5b8;}
+    .game-header .game-controls {margin:4px 0;padding-left:18px;color:#c8c8d8;}
+    main {display:flex;flex-direction:column;align-items:center;padding:16px;}
+    canvas {background:#0f1320;border:1px solid #2a2f44;}
+    .game-restart {margin-top:10px;padding:8px 14px;background:#1c2030;color:#7df9ff;border:1px solid #2a2f44;cursor:pointer;}
+    .game-restart:hover {background:#232842;}
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Chrono Surge</h1>
+    <p class="game-description">Tap to trigger a brief time-dilation burst: the dot accelerates forward while the scrolling tunnel temporarily slows down, letting you thread through tight clusters. After the burst a short cooldown prevents immediate reuse.</p>
+    <ul class="game-controls">
+      <li>Tap / Click to activate time dilation</li>
+      <li>Cooldown prevents immediate reuse</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    // (future config constants)
+    const PLAYER_RADIUS = 6;
+    const PLAYER_LATERAL_SPEED = 300; // px/sec
+    const PLAYER_FORWARD_SPEED = 200; // px/sec
+
+    // === STATE ==============================================================
+    // Global game state
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+
+    let player = { x: canvas.width / 2, y: canvas.height / 2, vx: 0, vy: 0 };
+    let hazards = [];
+    let score = 0;
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+    let keys = new Set();
+    let highScore = 0;
+    let lastTime = performance.now();
+    let loopId = null;
+    let audioCtx = null;
+
+    // === HAZARD SYSTEM =============================================================
+    const HAZARD_SPEED = 150; // px/sec vertical movement
+    const HAZARD_RADIUS = 8;
+    const SAFE_RADIUS = 200; // safe distance from player at spawn
+    const HAZARD_SPAWN_INTERVAL = 1.5; // base interval seconds
+    let hazardSpawnTimer = 0;
+
+    function spawnHazard() {
+      // Random x position within canvas, respecting radius
+      const x = Math.random() * (canvas.width - HAZARD_RADIUS * 2) + HAZARD_RADIUS;
+      const y = -HAZARD_RADIUS; // spawn just above the visible area
+      // Simple safe spawn check: ensure distance from player >= SAFE_RADIUS
+      const dx = x - player.x;
+      const dy = y - player.y;
+      if (Math.hypot(dx, dy) < SAFE_RADIUS) {
+        // Skip this spawn; will try again on next timer tick
+        return;
+      }
+      hazards.push({ x, y, radius: HAZARD_RADIUS });
+    }
+
+    function updateHazards(dt) {
+      // Spawn timer countdown
+      hazardSpawnTimer -= dt;
+      if (hazardSpawnTimer <= 0) {
+        spawnHazard();
+        // Reset timer with slight randomness
+        hazardSpawnTimer = HAZARD_SPAWN_INTERVAL + Math.random();
+      }
+      // Move existing hazards
+      for (let i = hazards.length - 1; i >= 0; i--) {
+        const h = hazards[i];
+        h.y += HAZARD_SPEED * dt;
+        // Remove hazards that are off-screen
+        if (h.y - h.radius > canvas.height) {
+          // Increment score for safe passage
+          score++;
+          hazards.splice(i, 1);
+        }
+      }
+    }
+
+    // === UPDATE =============================================================
+    function updatePlayer(dt) {
+      // Lateral movement
+      const dirX = (keys.has("ArrowRight") || keys.has("d") || keys.has("D") ? 1 : 0)
+                 - (keys.has("ArrowLeft") || keys.has("a") || keys.has("A") ? 1 : 0);
+      player.x += dirX * PLAYER_LATERAL_SPEED * dt;
+      // Clamp horizontal
+      player.x = Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, player.x));
+      // Forward movement (upwards)
+      player.y -= PLAYER_FORWARD_SPEED * dt;
+      // Clamp vertical within canvas
+      player.y = Math.max(PLAYER_RADIUS, Math.min(canvas.height - PLAYER_RADIUS, player.y));
+    }
+
+    function checkCollisions() {
+      for (const h of hazards) {
+        const dx = h.x - player.x;
+        const dy = h.y - player.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < PLAYER_RADIUS + h.radius) {
+          phase = "gameover";
+          // Stop loop
+          if (loopId !== null) cancelAnimationFrame(loopId);
+          loopId = null;
+          break;
+        }
+      }
+    }
+
+    function update(dt) {
+      if (phase !== "playing") return;
+      updatePlayer(dt);
+      updateHazards(dt);
+      checkCollisions();
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      // Background tunnel (radial gradient)
+      const grad = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 0,
+                                            canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) / 2);
+      grad.addColorStop(0, "#0a0a0f");
+      grad.addColorStop(1, "#0f1320");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Hazards (neon circles)
+      ctx.fillStyle = "#ff52ae";
+      for (const h of hazards) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Player (high‑contrast dot)
+      ctx.fillStyle = "#7df9ff";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+
+      // HUD (score)
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+
+      // Game‑over overlay
+      if (phase === "gameover") {
+        ctx.fillStyle = "rgba(10,10,15,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#ff52ae";
+        ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#e6e6f0";
+        ctx.fillText(`Final score ${score}`, canvas.width / 2, canvas.height / 2 + 14);
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#a5a5b8";
+        ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+      }
+    }
+
+    // === LOOP =============================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          // Clear canvas
+          ctx.fillStyle = "#0f1320";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          // Update game logic
+          update(dt);
+          // Render frame (HUD)
+          render();
+          // TODO: publishState
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        // Continue looping unless game over
+        if (phase !== "gameover") {
+          loopId = requestAnimationFrame(tick);
+        } else {
+          loopId = null;
+        }
+      }
+      // Start first frame
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === RESET =============================================================
+    // Placeholder reset function – will be expanded later
+    function reset() {
+      // Basic stub: restart the loop
+      console.log("reset called");
+      // Optionally reinitialize state here in future
+      startLoop();
+    }
+
+    // === INPUT =============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+    // Tap / click listener for burst activation (placeholder)
+    document.addEventListener("click", (ev) => {
+      // TODO: trigger time‑dilation burst
+    });
+
+    // === BOOT =============================================================
+    // Start the game loop on page load
+    reset();
+  </script>
+</body>
+</html>

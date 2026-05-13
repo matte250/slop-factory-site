@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Echo Clone</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Echo Clone</h1>
+    <p class="game-description">Tap to spawn a short‑lived clone of the dot that trails behind; a second tap swaps control to the clone, letting you retreat to a safer position while the original continues forward.</p>
+    <ul class="game-controls">
+      <li>Tap / click to spawn a clone</li>
+      <li>Tap / click again to swap control</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const W = 800;
+    const H = 600;
+    // numeric constants
+    const PLAYER_RADIUS = 8;
+    const PLAYER_SPEED = 200; // px/sec
+    const CLONE_LIFETIME = 1.5; // sec
+    const HAZARD_SPAWN_INTERVAL = 2.0;
+    const HAZARD_SPEED = 150;
+    const HAZARD_RADIUS = 8;
+    const SAFE_RADIUS = 120; // safe spawn radius to avoid immediate collisions
+    const PLAYER_TURN = Math.PI * 1.8; // rad/sec
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+
+    let player;   // {x, y, vx, vy, alive}
+    let clone;    // {x, y, vx, vy, alive, life}
+    let hazards;  // array of hazard objects
+    let score;
+    let highScore = 0;
+    let phase;   // "menu" | "playing" | "gameover"
+    let timers; // placeholder for any timers
+    let keys;
+    let lastTime;
+    let loopId = null;
+    let audioCtx = null;
+
+    // === RESET ==============================================================
+    function reset() {
+      player = { x: W/2, y: H/2, vx: 0, vy: 0, angle: -Math.PI/2, alive: true };
+      clone = null;
+      hazards = [];
+      score = 0;
+      phase = "playing";
+      timers = { hazardSpawn: 0, cloneLife: 0 };
+      keys = new Set();
+      lastTime = performance.now();
+      startLoop();
+    }
+
+    // === LOOP / UPDATE ======================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          // Clear canvas each frame
+          ctx.clearRect(0, 0, W, H);
+          // Update player movement
+        if (phase === "playing") {
+          // Rotate player based on arrow keys (left/right) or A/D
+          const turnIn = (keys.has('ArrowRight') || keys.has('d') || keys.has('D') ? 1 : 0)
+                       - (keys.has('ArrowLeft')  || keys.has('a') || keys.has('A') ? 1 : 0);
+          player.angle += turnIn * PLAYER_TURN * dt;
+          // Move forward constantly
+          player.x += Math.cos(player.angle) * PLAYER_SPEED * dt;
+          player.y += Math.sin(player.angle) * PLAYER_SPEED * dt;
+          // Clamp position within canvas bounds
+          if (player.x < 0) player.x = 0;
+          if (player.x > W) player.x = W;
+          if (player.y < 0) player.y = 0;
+          if (player.y > H) player.y = H;
+        }
+        // Update hazards positions (if any)
+        for (const h of hazards) {
+          h.x += h.vx * dt;
+          h.y += h.vy * dt;
+        }
+        // Collision detection
+        if (phase === "playing") {
+          for (const h of hazards) {
+            const dx = h.x - player.x;
+            const dy = h.y - player.y;
+            const distSq = dx * dx + dy * dy;
+            const rad = PLAYER_RADIUS + HAZARD_RADIUS;
+            if (distSq < rad * rad) {
+              phase = "gameover";
+              beep(110, 0.3);
+              // stop the loop by not scheduling next frame
+              break;
+            }
+          }
+        }
+          render();
+          publishState();
+        } catch (err) {
+          console.error('loop error', err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === RENDER ==============================================================
+    function render() {
+      // Fill background
+      ctx.fillStyle = "#05050c";
+      ctx.fillRect(0, 0, W, H);
+
+      // Draw hazards (if any)
+      ctx.fillStyle = "#ff52ae"; // hazard color
+      for (const h of hazards) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, HAZARD_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw clone if active and alive
+      if (clone && clone.alive) {
+        ctx.fillStyle = "#ffd23f"; // clone color
+        ctx.beginPath();
+        ctx.arc(clone.x, clone.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw player
+      if (player && player.alive) {
+        ctx.fillStyle = "#7df9ff"; // player color
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // HUD - score
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener('click', reset);
+
+    // === AUDIO (lazy) =======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + durSec);
+      } catch {}
+    }
+
+    // === OBSERVABLE CONTRACT ================================================
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score,
+        player: {
+          x: player?.x ?? 0,
+          y: player?.y ?? 0,
+          visible: player?.x >= 0 && player?.x < W && player?.y >= 0 && player?.y < H,
+        },
+        objective: "Tap to spawn a clone and swap control to survive hazards."
+      };
+    }
+
+    // === BOOT ==============================================================
+    reset();
+
+  </script>
+</body>
+</html>
