@@ -1,0 +1,283 @@
+The user gave instructions: they have completed tasks 1-7 and the page loads cleanly. Now they want task 8: Collision detection. Must add code to detect player vs hazards, trigger gameOver phase and stop gameplay loop.
+
+The current index.html includes sections:
+
+- Placeholder script comment, then // === STATE, // === INPUT, // === LOOP, and then window.__game.
+
+We need to add code for collision detection in appropriate block: The reference template placed detect logic inside the update loop (the "UPDATE" section). However the current code does not yet have an update section; we have a simple placeholder loop that just clears canvas each frame.
+
+We haven't added update function or rendering beyond the placeholder. In previous tasks, we haven't added a separate UPDATE section. However the convention from reference example: after // === LOOP, they have update logic inside startLoop tick: they call update(dt); render(); publishState(); But we haven't yet added that. The tasks up to now may have been building gradually. Let's examine the tasks list.
+
+TASKS.md lines:
+
+1. HTML scaffold + meta.json — done.
+2. Game state objects — done (added player, hazards, score, phase).
+3. Animation loop — implement startLoop with AF, cancel, try/catch, clear canvas each frame — done (we have a placeholder that clears canvas each frame). Possibly later tasks will add update and render.
+4. Input handling — set up keys Set, R-key restart, restart button — done.
+5. Player size toggle — toggle on click — done.
+6. Player movement — dt-based forward motion and optional lateral drift, ensure controls from meta.json affect player velocity. We added forward speed and lateral speed constants. But not yet updating player position each frame. Probably that will be part of update. We'll need to incorporate movement into update.
+
+7. Hazard system — create data structure for obstacles, spawn rules respecting SAFE_RADIUS, and dt-scaled motion. Not yet added; user said they did it.
+
+So we need to implement collision detection.
+
+We must locate appropriate section for collision detection.
+
+Given we have // === UPDATE missing. Actually we have // === LOOP section that contains loop and placeholder code. We must add code to detect collisions.
+
+We have to modify code such that at each frame we check hazards array entries, and if any collides with player based on player size (small vs large) we set phase to "gameover" and stop the loop.
+
+We also need to stop gameplay loop when gameover triggered: likely we stop by not scheduling next loop? Actually the current loop always schedules next tick. For a proper stop, we could set phase = "gameover" and perhaps won't update any more? But to stop looping we might need to cancel animation frames. The reference job: In update function they may stop by setting phase to "gameover" then the loop continues but only renders overlay. However contract requiring to stop gameplay loop? The spec says "trigger gameOver phase and stop gameplay loop." In reference: they did "phase = 'lost'; ... return;" then the loop still runs but no updates? Actually they still run update each frame; but if phase is "lost", they skip update but still loop. However the spec saying stop gameplay loop maybe refers to the "phase" end; but we might stop by not calling requestAnimationFrame after gameover. In our loop we call requestAnimationFrame every iteration regardless; but we can early exit after gameOver detection: maybe set loopId = null and not schedule more? But that would break the loop; however we must still have visible overlay; rendering will stop but gameover overlay currently not drawn; but at least collision detection will set phase and stop loop.
+
+Given tasks, maybe later tasks will handle rendering overlay.
+
+So let's implement detection: for each hazard in hazards array, we need shape and detection. Since we haven't defined hazard types, but we can approximate generic.
+
+We need to define hazard object structure: maybe includes x, y, w, h, type (e.g., "spike", "block", "gap"?). But we haven't added hazard spawn logic in task 7. Now we need to add detection that can handle whatever hazard objects.
+
+Simplify: We'll assume hazards have properties: x, y, w, h, type, maybe "crushable" boolean. We'll just detect rectangle collisions (player is a circle). Player has radius based on size: small radius maybe 10; large radius maybe 20. Determine radius: we can define constants: SMALL_RADIUS = 8, LARGE_RADIUS = 16 maybe. We'll add constants.
+
+Implementation: In loop tick, after we clear canvas, we need to update player position (apply forward motion and lateral drift). Actually movement hasn't been added yet; we might have added constants but not logic. However collision detection can be done regardless. However if we add detection referencing player.x, player.y.
+
+We need to ensure we have physics code: we haven't added a update call; but we could embed simple movement inside the loop tick as part of placeholder. The task 8 only requests collision detection, not movement. Fine.
+
+We need to add detection after placeholder; but we need to ensure we have access to the hazards array.
+
+So modify code in tick after clearing canvas to iterate hazards and check for collision.
+
+Define constants? In // === STATE we could add radius values based on size.
+
+Better: Add smallRadius and largeRadius constants in // === STATE.
+
+Alternatively compute radius:
+
+function playerRadius() { return player.size === "small" ? 8 : 16; }
+
+Add function maybe earlier.
+
+Simplify detection: for each hazard in hazards, if hazard.alive (maybe), compute bounding box. For simplicity, treat hazard as a rect with h/w.
+
+Collision detection: compute distance between player center and hazard center? For simplicity rectangle circle intersect: if player's circle overlaps rectangle:
+
+if (player.x + r > hazard.x && player.x - r < hazard.x + hazard.w && player.y + r > hazard.y && player.y - r < hazard.y + hazard.h) -> collision.
+
+If collision => if appropriate size? The game design: Tiny passes through narrow passages; large crushes small obstacles; spikes kill regardless, etc. But this is too complex. For a placeholder, we can cause gameover on any collision regardless of size (bad but maybe acceptable later). But maybe we need to check hazard.type to decide. Since we haven't defined hazard types, implement generic: any collision triggers game over.
+
+The requirement: "detect player vs hazards, trigger gameOver phase and stop gameplay loop."
+
+Thus if any collision occurs, set phase = "gameover", update window.__game.state = "gameover", use cancelAnimationFrame.
+
+Implementation: At collision detection, we will set phase = "gameover" and update window.__game.state. Also cancel the loop: call cancelAnimationFrame(loopId) and set loopId = null; maybe still need to stop scheduling next tick.
+
+But note within tick we currently schedule next tick after try/catch block at bottom. If we cancel inside the same tick, that call may cancel future request but we still schedule loopId = requestAnimationFrame(tick). We need to prevent that. Simplify: after detection we can set a variable stopLoop = true; and after detection we break out but before requestAnimationFrame(tick), we check if stopLoop then don't schedule. But as per spec we can just call cancelAnimationFrame(loopId) before scheduling the next.
+
+Implementation: When we detect collision: set phase = "gameover"; window.__game.state = "gameover"; if(loopId !== null) cancelAnimationFrame(loopId); loopId = null; and return; But we still after that the code will fall through to "loopId = requestAnimationFrame(tick)". To prevent scheduling, we can add a return after cancel before that line.
+
+Better: restructure code: place detection at top of tick, and after detection if phase === "gameover", we return without scheduling further. However in code we need to adapt.
+
+Simplify: modify tick to:
+
+function tick(now) {
+  try {
+    const dt = Math...
+    // update position maybe later.
+    // clear canvas
+    ...
+    // collision detection
+    for(const h of hazards) {
+        if (collision) {
+            phase = "gameover";
+            window.__game.state = "gameover";
+            // Stop loop
+            if(loopId !== null) cancelAnimationFrame(loopId);
+            return; // exit tick, no further schedule
+        }
+    }
+  } catch (err) { console.error...}
+  loopId = requestAnimationFrame(tick);
+}
+
+But note that the function tick is called initially via requestAnimationFrame(tick). When we cancel loop inside tick, we must also not schedule new request after detection. So we must include early exit.
+
+Implement collision detection code accordingly.
+
+We must also update window.__game when player position changes? Not needed now.
+
+Let's edit index.html accordingly.
+
+We need to add a constant for smallRadius and largeRadius maybe as separate constants in // === STATE.
+
+Search // === STATE for where to add.
+
+We are at line 33-38.
+
+We'll add after const hazards line: const PLAYER_SMALL_RADIUS = 8; const PLAYER_LARGE_RADIUS = 16;
+
+Also maybe add detection function.
+
+But simpler to put detection code inside tick as described.
+
+Let's edit the index.html.
+
+Need to find line where tick's placeholder code ends. We'll edit between lines 78-85 maybe after clearing canvas or before scheduling.
+
+The snippet currently:
+
+78: const ctx = canvas.getContext("2d");
+79: ctx.fillStyle = "#0f1320";
+80: ctx.fillRect(0, 0, canvas.width, canvas.height);
+81: } catch (err) {
+82: console.error("loop error", err);
+83: }
+84: loopId = requestAnimationFrame(tick);
+85: }
+
+We need to insert detection after clearing canvas and before the catch? Actually detection after clearing is appropriate. So within try block after clearing we can add code.
+
+Thus modify the content: replace oldString that includes the placeholder clear code and then add detection.
+
+We'll edit the code block: find oldString from line 78-81. But we need a unique oldString to replace that portion.
+
+We can replace the block from "ctx.fillStyle = \"#0f1320\";" through "ctx.fillRect(0, 0, canvas.width, canvas.height);" and add detection after it.
+
+But to avoid complexity, we can add a new block after line 80 (the fillRect) via edit: find the snippet "ctx.fillRect(0, 0, canvas.width, canvas.height);" and replace it with same plus detection code.
+
+The edit will replace that oldString with an extended version. Use replaceAll? We'll do a replace for that line.
+
+Let's prepare newString: Keep the same lines but after fillRect add detection code, something like:
+
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ // Collision detection
+ for (const h of hazards) {
+   const r = player.size === "small" ? PLAYER_SMALL_RADIUS : PLAYER_LARGE_RADIUS;
+   if (player.x + r > h.x && player.x - r < h.x + (h.w || 0) && player.y + r > h.y && player.y - r < h.y + (h.h || 0)) {
+     phase = "gameover";
+     window.__game.state = "gameover";
+     if (loopId !== null) cancelAnimationFrame(loopId);
+     return;
+   }
+ }
+
+We need PLAYER_SMALL_RADIUS and PLAYER_LARGE_RADIUS defined in state. We'll edit state to add them.
+
+Let's edit state: after hazards line.
+
+Search oldString: "const hazards = []; // array of obstacle objects". We'll replace that line with multiple lines.
+
+Better to edit oldString: "const hazards = []; // array of obstacle objects" -> new block with hazards definition plus radius constants.
+
+We'll edit accordingly.
+
+Be careful with double quotes inside JSON? This is JS code, so okay.
+
+Now implement changes using edit tool.
+
+
+
+---
+
+We need to implement task 8: collision detection, trigger gameOver phase and stop gameplay loop. Also ensure page loads without console errors.
+
+We need to examine the existing structure. The file currently has sections:
+
+- // === STATE
+- // === INPUT
+- // === LOOP (currently we have startLoop that clears canvas; we need to also possibly call update logic inside tick)
+- The collision detection likely belongs in update step. However there is no UPDATE section yet. In tasks list, there is an UPDATE step maybe later. But we can stub collision detection within the loop.
+
+The prompt says: "Collision detection — detect player vs hazards, trigger gameOver phase and stop gameplay loop."
+
+Thus we need to add code that checks hazards each frame and when a collision occurs, set phase to "gameover", maybe similarly to the example. Also we need to stop the loop i.e., cancelAnimationFrame and not continue.
+
+We need to do this within appropriate // === SECTION ===.
+
+We have // === LOOP section. Perhaps we add a // === UPDATE section before rendering (though not required yet). Let's check the current index.html content:
+
+Lines 31 onward:
+
+```
+<script>
+    // Placeholder script for Size Shift game. Actual game logic will be added in later tasks.
+    // === STATE ==============================================================
+    // Game state objects
+    const player = { x: 400, y: 300, size: "small", visible: true };
+    const hazards = []; // array of obstacle objects
+    const FORWARD_SPEED = 150; // forward speed in px/sec
+    const LATERAL_SPEED = 300; // lateral speed in px/sec
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+    // Ensures the page loads without errors.
+    // === INPUT ==============================================================
+    const keys = new Set();
+    function reset() {
+        // Reset game state to initial values
+        player.x = 400;
+        player.y = 300;
+        player.size = "small";
+        player.visible = true;
+        hazards.length = 0;
+        score = 0;
+        phase = "menu";
+        // Update observable state
+        window.__game.state = "menu";
+        window.__game.score = 0;
+        window.__game.player.x = player.x;
+        window.__game.player.y = player.y;
+        window.__game.player.visible = player.visible;
+    }
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "r" || ev.key === "R") { reset(); return; }
+        keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => {
+        keys.delete(ev.key);
+    });
+    const restartBtn = document.getElementById("restart");
+    restartBtn.addEventListener("click", reset);
+    // Size toggle on canvas click / tap
+    function toggleSize() {
+        player.size = (player.size === "small") ? "large" : "small";
+    }
+    document.getElementById("game").addEventListener("click", toggleSize);
+    // === LOOP ==============================================================
+    let loopId = null;
+    let lastTime = performance.now();
+    function startLoop() {
+        if (loopId !== null) cancelAnimationFrame(loopId);
+        function tick(now) {
+            try {
+                const dt = Math.min((now - lastTime) / 1000, 0.1);
+                lastTime = now;
+                // placeholder: clear canvas each frame
+                const canvas = document.getElementById("game");
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#0f1320";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            } catch (err) {
+                console.error("loop error", err);
+            }
+            loopId = requestAnimationFrame(tick);
+        }
+        loopId = requestAnimationFrame(tick);
+    }
+    // Start animation loop
+    startLoop();
+    
+    window.__game = {
+      state: "menu",
+      score: 0,
+      player: { x: 400, y: 300, visible: true },
+      objective: "Tap to toggle size and survive the tunnel obstacles."
+    };
+</script>
+```
+
+There is no `score` variable defined after editing; the variable `score` is defined earlier? Let's locate it: Actually we have `let score = 0;` after the FORWARD_SPEED and LATERAL_SPEED definition. Indeed we have not changed that. I see the editing earlier added FORWARD_SPEED and LATERAL_SPEED but didn't adjust accordingly. Let's re-open lines earlier to confirm:
+
+Scrolling up earlier lines after STATE, we have:
+
+`const player`, `const hazards`, `const FORWARD_SPEED`, etc. Let's open around lines 33-38.
+
+{"filePath":"/tmp/slop-factory-work/size-shift-2-6d09fb27/index.html","offset":30,"limit":50}
+
+---
+
