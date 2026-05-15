@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Charge Leap</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 20px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Charge Leap</h1>
+    <p class="game-description">Hold to charge a vertical jump and release to launch the dot upward; the longer the charge, the higher the leap, letting you clear tall obstacles before a short cooldown.</p>
+    <ul class="game-controls">
+      <li>Hold Space to charge and release to jump</li>
+      <li>Press R or click Restart to reset</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    // (no config yet)
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+    const PLAYER_RADIUS = 5;
+    const PLAYER_SPEED = 300; // px/sec
+    const PLAYER_FRICTION = 0.9;
+    const HAZARD_SPEED = 200; // px/sec leftward
+    const SPAWN_INTERVAL = 2; // seconds
+    let player = { x: canvas.width / 2, y: canvas.height - 60 };
+    let hazards = [];
+    let score = 0;
+    let phase = "menu";
+    let keys = new Set();
+    let lastTime = performance.now();
+    let loopId = null;
+    let audioCtx = null;
+    let spawnTimer = SPAWN_INTERVAL;
+
+    // === INPUT ==============================================================
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "r" || ev.key === "R") { reset(); return; }
+        keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+
+    // === HELPERS ============================================================
+    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+    // === RESET ==============================================================
+    function reset() {
+        player = { x: canvas.width / 2, y: canvas.height - 60 };
+        hazards = [];
+        score = 0;
+        phase = "playing";
+        keys.clear();
+        lastTime = performance.now();
+        spawnTimer = SPAWN_INTERVAL;
+        publishState();
+        startLoop();
+    }
+
+    // === UPDATE ==============================================================
+    function update(dt) {
+        if (phase !== "playing") return;
+        // Player horizontal movement (optional)
+        let dirX = 0;
+        if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) dirX += 1;
+        if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dirX -= 1;
+        player.x += dirX * PLAYER_SPEED * dt;
+        player.x = clamp(player.x, PLAYER_RADIUS, canvas.width - PLAYER_RADIUS);
+        // Hazards movement
+        for (const h of hazards) {
+            h.x -= HAZARD_SPEED * dt;
+        }
+        // Collision detection
+        for (const h of hazards) {
+            if (
+                player.x + PLAYER_RADIUS > h.x &&
+                player.x - PLAYER_RADIUS < h.x + h.w &&
+                player.y + PLAYER_RADIUS > h.y &&
+                player.y - PLAYER_RADIUS < h.y + h.h
+            ) {
+                phase = "gameover";
+                beep(110, 0.25);
+                break;
+            }
+        }
+        // Remove off-screen hazards and increase score
+        hazards = hazards.filter(h => {
+            if (h.x + h.w < 0) {
+                score += 1;
+                beep(440, 0.05);
+                return false;
+            }
+            return true;
+        });
+        // Spawn new hazards
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+            spawnTimer = SPAWN_INTERVAL;
+            const w = 20;
+            const h = 80;
+            const y = canvas.height - h; // ground obstacle
+            hazards.push({ x: canvas.width, y, w, h });
+        }
+    }
+
+    // === RENDER ==============================================================
+    function render() {
+        // Draw hazards
+        ctx.fillStyle = "#ff52ae";
+        for (const h of hazards) {
+            ctx.fillRect(h.x, h.y, h.w, h.h);
+        }
+        // Draw player
+        ctx.fillStyle = "#7df9ff";
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        // HUD
+        ctx.fillStyle = "#e6e6f0";
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.textAlign = "left";
+        ctx.fillText(`Score ${score}`, 12, 22);
+    }
+
+    // === GAMEOVER OVERLAY ====================================================
+    function renderGameOver() {
+        ctx.fillStyle = "rgba(10,10,15,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#ff52ae";
+        ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#e6e6f0";
+        ctx.fillText(`Final score ${score}`, canvas.width / 2, canvas.height / 2 + 14);
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillStyle = "#a5a5b8";
+        ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+    }
+
+    // === LOOP ==============================================================
+    function startLoop() {
+        if (loopId !== null) cancelAnimationFrame(loopId);
+        function tick(now) {
+            try {
+                const dt = Math.min((now - lastTime) / 1000, 0.1);
+                lastTime = now;
+                // Clear canvas
+                ctx.fillStyle = "#0f1320";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                // Update and render
+                update(dt);
+                render();
+                if (phase === "gameover") {
+                    renderGameOver();
+                }
+                publishState();
+            } catch (err) {
+                console.error("loop error", err);
+            }
+            if (phase !== "gameover") {
+                loopId = requestAnimationFrame(tick);
+            }
+        }
+        loopId = requestAnimationFrame(tick);
+    }
+
+    // === AUDIO (lazy) =======================================================
+    function beep(freq, durSec) {
+        try {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = "square";
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + durSec);
+        } catch {}
+    }
+
+    // === OBSERVABLE CONTRACT ================================================
+    function publishState() {
+        window.__game = {
+            state: phase === "playing" ? "playing" : (phase === "gameover" ? "gameover" : "menu"),
+            score,
+            player: {
+                x: player.x,
+                y: player.y,
+                visible: player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height
+            },
+            objective: "Hold Space to charge and release to jump over obstacles."
+        };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+  </script>
+</body>
+</html>
