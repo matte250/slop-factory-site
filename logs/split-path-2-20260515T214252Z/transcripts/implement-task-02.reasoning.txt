@@ -1,0 +1,501 @@
+We need to implement task 2: Game state initialization. Let's read the current index.html we created to see its sections.
+
+Current index.html content:
+
+```
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Split Path</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Split Path</h1>
+    <p class="game-description">Tap to split a moving dot, keep both alive while obstacles appear, tap again to merge them back into a single dot.</p>
+    <ul class="game-controls">
+      <li>Tap to split the dot into two side‑by‑side dots</li>
+      <li>Tap again to merge them back into one</li>
+      <li>Avoid obstacles that appear in either lane</li>
+      <li>Press R or click Restart to start over</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const W = 800, H = 600;
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let ship;          // { x, y, vx, vy, angle, alive }
+  let bullets;       // placeholder array
+  let obstacles;     // placeholder array
+  let score;
+  let highScore = 0;
+  let phase;         // "playing" | "gameover"
+  let keys;
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+
+  // === RESET ==============================================================
+  function reset() {
+    ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };
+    bullets = [];
+    obstacles = [];
+    score = 0;
+    phase = 'playing';
+    keys = new Set();
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP / UPDATE =====================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error('loop error', err);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  function update(dt) {
+    // Placeholder – no game logic yet
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#05050c';
+    ctx.fillRect(0, 0, W, H);
+    // Draw ship placeholder
+    if (ship && ship.alive) {
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(ship.x, ship.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+  });
+  document.addEventListener('keyup', (ev) => { keys.delete(ev.key); });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: phase,
+      score: score,
+      player: {
+        x: ship ? ship.x : 0,
+        y: ship ? ship.y : 0,
+        visible: ship ? (ship.x >= 0 && ship.x < W && ship.y >= 0 && ship.y < H) : false,
+      },
+      objective: 'Tap to split and merge the dot while avoiding obstacles.',
+    };
+  }
+
+  // === HELPERS ============================================================
+  function wrap(v, max) {
+    if (v < 0) return v + max;
+    if (v >= max) return v - max;
+    return v;
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
+```
+
+Now we need to add in Game state initialization step: declare player object, obstacles array, score, phase, split flag, lane constants, and SAFE_RADIUS constant at script top.
+
+But note currently we have placeholders: we have ship variable (in our case should be player? Actually "player object" maybe rename to ship? The spec states "declare player object". But we have ship variable. In split path, the player is a dot not a ship? Might need to rename to player variable? However the overall structure template uses a ship object. But the instructions say "declare player object". Likely need variable named "player" consistent with observable contract uses ship? The observable contract expects player object's coordinates etc. It currently references ship in publishState. We need to adjust.
+
+Better to adjust to new variable naming: maybe rename ship to "player". However the template used ship previously to illustrate but split path game may have a "player" object as the dot. The observable contract expects player properties "x", "y", visible. Currently we use ship variable for that, but we could alias.
+
+Task "Game state initialization — declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top." So we need to define variables: player (object with appropriate properties), obstacles (array), score (maybe numeric), phase (string), split flag (boolean?), lane constants (maybe LANE_LEFT, LANE_RIGHT?), SAFE_RADIUS (distance area? maybe for spawning obstacles away from player). Not clear but we must declare them at the script top, i.e., after // === STATE or before? The instruction says script top: "at script top". The "script top" could be after CONFIG section? In example code, state declarations are in STATE section. So we will add new declarations there. Already we have ship, bullets, obstacles, score, highScore, phase, keys, lastTime, loopId, audioCtx. We'll adjust to match spec.
+
+We need to incorporate a split flag: let split = false; indicating whether dot is split. Lane constants: maybe LANE_LEFT = 0; LANE_RIGHT = 1; Or maybe just define number of lanes: const LANE_COUNT = 2; and maybe LANE_WIDTH = W/2? But we need to just declare them; no behavior needed yet.
+
+Also, "SAFE_RADIUS" constant for spawn safety: const SAFE_RADIUS = ... maybe 80 (some arbitrary). We can set to 80.
+
+But we must ensure we do not create runtime errors.
+
+Also note error about referencing variables that are not defined? The only usage of lane constants or split flag currently nonexistent. So adding these declarations won't break anything.
+
+Also need to rename player variable. The observable contract currently uses ship variable reference; we should change that to player. But the task does not explicitly require renaming ship to player; it says "declare player object". Could we keep both ship and player? But that may be contradictory. We may keep ship variable as placeholder but also add a player object variable. However the publishState references ship now; if we add player variable and not use ship, we could leave as is, but "player object" likely means we need to rename ship => player. However they might test for existence of a variable named player. They might use observable contract (which we control). However the validator may check if window.__game.player.x matches player.x from code. It might not check variable naming but expects player variable existence. The instruction says "declare player object". That's a requirement.
+
+Thus we need to ensure player object exists. Whether ship also exists is not a problem. Could keep both; but better rename ship to player for consistency.
+
+We also need to adjust any code referencing ship (reset() sets ship, render uses ship). Since we haven't implemented gameplay yet, we can just rename these references to player.
+
+Let's search for "ship" occurrences in file.
+
+We have in // === STATE:
+
+`let ship; // { x, y, vx, vy, angle, alive }`
+
+`let bullets; // placeholder array`
+
+`let obstacles; // placeholder array`
+
+Later in reset(): `ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };`
+
+Also other functions: render draws ship placeholder: `if (ship && ship.alive) { ... }`
+
+PublishState uses ship: `x: ship ? ship.x : 0`, `y: ...`, `visible: ship ? (ship.x >= 0 && ship.x < W && ship.y >= 0 && ship.y < H) : false`.
+
+So we should rename to player. But we also need bullets? The player object may have vx, vy, angle? For split path maybe only x, y and view? But we can keep.
+
+Also update placeholder objects accordingly.
+
+Now define lane constants: maybe const LEFT_LANE_X = W/4, const RIGHT_LANE_X = 3*W/4? Or something else. But for now just constants: `const LANE_COUNT = 2; const LANE_WIDTH = W / LANE_COUNT;` Also define SAFE_RADIUS = 80.
+
+Now we need to ensure variables are declared at script top within STATE or CONFIG section. Let's add them after other let declarations; they should be top-level, not inside functions.
+
+Potential variable naming collisions: we already have let obstacles declared; okay.
+
+Add `let player; // { x, y, vx, vy, alive? }` but we might rename.
+
+Simplify: rename ship to player and adjust references.
+
+Implementation plan:
+
+- In STATE section, replace `let ship; // { x, y, vx, vy, angle, alive }` with `let player; // { x, y, vx, vy, angle, alive }` (or no angle to simplify). To preserve comments. Need to edit file.
+
+- Update any reference of ship variable to player.
+
+Specifically:
+
+- In reset(): assign to player.
+
+- In render(): if (player && player.alive) { draw using player.x etc }
+
+- In publishState(): use player.
+
+- In other code perhaps there are none else.
+
+- Keep bullets, obstacles, score, highScore, phase, keys, lastTime, loopId, audioCtx.
+
+- Add new constants within CONFIG section: maybe define LANE_LEFT = 0; LANE_RIGHT = 1; const SAFE_RADIUS = 80;. Better to place after W and H.
+
+- Also maybe define split flag: `let split = false;` Under STATE.
+
+- Also lane constants might be used for obstacle spawn lanes. Not yet used, but just declarations.
+
+- Ensure code remains error-free.
+
+Now, implement edits using edit tool.
+
+We'll need to read the file to get line numbers for context.
+
+
+
+---
+
+The user wants to do Task 2: Game state initialization — declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top.
+
+We need to edit index.html, specifically in the // === STATE === block, adding new variables. Let's examine the CONVENTIONS.md, DESIGN.md, and TASKS.md. We need to read them. The question says "Read CONVENTIONS.md, DESIGN.md, and TASKS.md in your working directory carefully before doing anything else." So we need to read those files. Let's see if they exist. Use glob.
+
+
+
+---
+
+The user wants to implement Task 2: Game state initialization — declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top.
+
+The current script has a CONFIG section (only W,H). In STATE we have canvas, ctx, restartBtn, and variables: ship, bullets, obstacles, score, highScore, phase, keys, lastTime, loopId, audioCtx.
+
+We need to modify to fit the specification: "declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top."
+
+The reference template style (asteroids) uses "CONFIG" for constants. The "STATE" declares variables.
+
+The task says "Game state initialization — declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top."
+
+Thus likely want to move some of those constant like lane constants (maybe LANE_X positions?) and SAFE_RADIUS to the CONFIG section. Also split flag is part of state: maybe "let split = false;" indicating whether the dot is split. Also we need player object instead of ship? The reference might refer to player object representing dot. Actually the reference code uses ship variable for player. Here they've a placeholder player: ship. But the spec says "declare player object". We have ship. Should rename to player? Possibly the design expects a variable named "player". The task just says "declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top." So we need to ensure those declarations exist.
+
+We need to modify code accordingly, but we must not rewrite entire script; we need to edit in place.
+
+So steps:
+
+- In CONFIG block, add lane constants and SAFE_RADIUS. Probably need two lanes positions: left lane X and right lane X. Not specified but typical. We'll define LANE_X = [W*0.25, W*0.75]; but might need to be constants for left/right lane positions. Or can define LANE_LEFT = W/3; LANE_RIGHT = 2*W/3; but no further spec. We'll just add constants: const LANE_LEFT = W / 3; const LANE_RIGHT = (2 * W) / 3; const SAFE_RADIUS = 60; (example). Use generic placeholder.
+
+- In STATE block, rename ship variable to player (or add new variable). We have "let ship; // { x, y, vx, vy, angle, alive }". We want to declare "let player; // { x, y, vx, vy, alive, split }" maybe. But the task just says "player object". So we can replace ship with player.
+
+But we need to ensure the rest of code uses player instead of ship; currently reset uses ship variable, render draws ship, input for split? Not yet. Since we haven't added game logic yet, but we need to ensure code still works (no errors). So we need to change references to ship to player, and also adjust any code that uses ship.
+
+Thus modify:
+
+- Declarations: replace "let ship; // { x, y, vx, vy, angle, alive }" with "let player; // { x, y, vx, vy, angle?, alive, split }". However angle may not be needed. Let's just keep same shape.
+
+- In reset() function: replace ship assignment with player = { x: W/2, y: H/2, vx:0, vy:0, angle:0, alive:true, split:false } (maybe split flag). Add "split" property.
+
+- In render() function: replace "if (ship && ship.alive)" with "if (player && player.alive)". Then draw player.
+
+- In publishState: references to ship replace with player.
+
+- Also any reference to ship.x, ship.y inside publishState and maybe elsewhere. There is no other code referencing ship. The placeholder code only references ship in render and publishState and reset. Also bullet logic doesn't use ship. So safe.
+
+- Also we need to add a variable split flag separate? Could be a separate variable "let split = false;" or as property in player. The task says "split flag" – maybe a separate global variable to indicate whether currently split. We'll add "let split = false;" in STATE block.
+
+- In CONFIG block: add lane constants and SAFE_RADIUS.
+
+Hence we need to edit index.html accordingly.
+
+We also need to ensure meta.json maybe not needed to change. Likely not.
+
+Now we need to use edit tool: replace sections accordingly.
+
+But since we need to preserve comments and line numbers, we will use edit tool for each change.
+
+Better to use replaceAll to replace multiple occurrences. However we must ensure the oldString is exact and unique.
+
+The edit tool requires we have read the file first (we already used read). We can perform multiple edit calls.
+
+We'll modify:
+
+- In CONFIG block: there is line 35: "const W = 800, H = 600;". We'll add after that lane constants and SAFE_RADIUS. Could replace that line with extended code or add new lines after.
+
+Simplest: after line 35 after the constant line, we can add new constants.
+
+To avoid messing with unique oldString, we can replace the line with the same line plus added constants. The old string is "const W = 800, H = 600;". We'll replace with something like "const W = 800, H = 600;\nconst LANE_LEFT = W / 3;\nconst LANE_RIGHT = (2 * W) / 3;\nconst SAFE_RADIUS = 80;". We'll need to ensure proper line breaks.
+
+But find unique line: line 35 is unique. We'll replace that.
+
+Second, replace "let ship;" with "let player; // { x, y, vx, vy, angle?, alive, split }" etc. Actually we need to also add "let split = false;" maybe separate.
+
+Original lines:
+
+42: let ship; // { x, y, vx, vy, angle, alive }
+43: let bullets; // placeholder array
+44: let obstacles; // placeholder array
+45: let score;
+46: let highScore = 0;
+47: let phase; // "playing" | "gameover"
+48: let keys;
+49: let lastTime;
+50: let loopId = null;
+51: let audioCtx = null;
+
+We'll replace "let ship;" line with "let player; // { x, y, vx, vy, angle, alive, split }". And we also need to add "let split = false;" maybe after player. Actually we can incorporate split property into player and not need separate variable. But task specifically says "split flag". Could be separate variable "let split = false;". Let's add that separate.
+
+Thus we'll modify lines accordingly.
+
+Also need to update code references.
+
+- Reset function lines 55-63. Currently sets ship = {...}. We'll modify to set player = {..., split:false}, maybe also set split global variable if we add that.
+
+Thus we must edit reset function.
+
+- Adjust render function lines 92-98.
+
+- Adjust publishState lines 131-134 (ship references).
+
+Let's do editing step by step.
+
+First edit CONFIG line.
+
+We'll use edit with oldString: "const W = 800, H = 600;". Add constants after.
+
+Second edit STATE declaration line for ship.
+
+Third add split flag variable: Change after player line, add "let split = false;" maybe as a separate line after player.
+
+Could also incorporate into player. But easiest is separate.
+
+After that, we need to adjust references.
+
+We'll replace "ship" with "player" in reset function (line 55). Actually line 55: "ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };". We'll replace with "player = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true, split: false };". Also need to set split = false (if separate flag). Could just set split = false; after definition, but we can also set split as part of player, adding property split. Let's choose separate flag to match "split flag". We'll keep both: we add split variable but also have split property? Not needed both. Let's decide: keep separate flag "let split = false;" that indicates if currently split. Then reset function should set split=false.
+
+If we set split property inside player but not use split flag elsewhere, not used. So better to have separate variable.
+
+Hence modify reset: set player = {...} (without split property) and set split = false; (or keep split in player? We'll add separate flag). For simplicity, keep player without split property, and define separate split flag.
+
+Hence modify reset: after player assignment, add "split = false;". In code we need to replace current line 55 with player assignment. Then add a line after that setting split.
+
+We'll need to modify multiple lines.
+
+Now adjust render: line 93-98.
+
+We replace "if (ship && ship.alive)" with "if (player && player.alive)". Also references to ship.x, ship.y with player.x, player.y.
+
+Thus modify lines 93-98.
+
+We need to also adjust publishState: lines 131-134.
+
+Update to reference player.
+
+Now update any other references: line 131-134 uses ship. We'll replace.
+
+Potential other references: inside render we have ship.x etc. Already.
+
+Potential references in placeholder code: obstacles? Not used.
+
+Now we need to edit each section.
+
+Since we have to use the edit tool for each modification.
+
+We need to know the exact oldString for each edit.
+
+The tool requires exact oldString; for long multi-line strings, need to use correct newline and whitespace.
+
+Better to replace lines individually.
+
+First edit CONFIG: oldString "const W = 800, H = 600;" -> newString includes new constants lines. Use replaceAll false.
+
+Second edit STATE line:
+
+"let ship;          // { x, y, vx, vy, angle, alive }" -> "let player;          // { x, y, vx, vy, angle, alive, split }". Need to match exactly; note spaces after variable may vary. In file line we have: "let ship;          // { x, y, vx, vy, angle, alive }". Let's see exactly: line 42 string: "let ship;          // { x, y, vx, vy, angle, alive }". There are spaces before comment, we keep them same length.
+
+We also need to add a new line after with "let split = false;". We can either replace line 42 with both lines? Could work: replace "let ship;          // { x, y, vx, vy, angle, alive }" with "let player;          // { x, y, vx, vy, angle, alive, split }\nlet split = false;" but that changes more than oldString, but it's allowed: newString can contain newline. It will replace exactly that line with new content which includes newline, resulting in an extra line. Should be okay.
+
+Alternatively separate edit: just replace line with player; and then add a new line after using another edit. Let's replace line 42 with both lines to reduce number of edits.
+
+Need to ensure that the new string includes a newline; editing will place that line exactly replacing the line, so after replacement there will be two lines: player declaration and split flag.
+
+Now reset function: find line 55: "    ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };". Actually the line includes indentation: 4 spaces? Let's inspect line in file: line 55: "    ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };". There are 4 spaces before ship. The content is "    ship = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };". We'll replace that with "    player = { x: W/2, y: H/2, vx: 0, vy: 0, angle: 0, alive: true };\n    split = false;". Ensure we keep indentation.
+
+Make sure to include newline and same indentation.
+
+Now render function: lines 93-98. Let's inspect them.
+
+Lines:
+
+92:     // Draw ship placeholder
+93:     if (ship && ship.alive) {
+94:       ctx.fillStyle = '#7df9ff';
+95:       ctx.beginPath();
+96:       ctx.arc(ship.x, ship.y, 8, 0, Math.PI * 2);
+97:       ctx.fill();
+98:     }
+
+We'll replace these four lines (or five) with new ones.
+
+Better to replace the line "if (ship && ship.alive) {" with "if (player && player.alive) {", also replace "ctx.arc(ship.x, ship.y, 8, ..." with "ctx.arc(player.x, player.y, 8, 0, Math.PI * 2);". Also replace comment "Draw ship placeholder" maybe keep but optional.
+
+Thus we need to do two edit calls: one for the if line, one for the arc line.
+
+Let's identify exact strings:
+
+Line 93: "    if (ship && ship.alive) {". 4 spaces? Actually it's line 93 with indentation of 4 spaces plus "if". In file: "    if (ship && ship.alive) {". So we will replace with "    if (player && player.alive) {".
+
+Line 96: "      ctx.arc(ship.x, ship.y, 8, 0, Math.PI * 2);". Indentation two spaces? Actually it's 6 spaces? It's "      ctx.arc(ship.x, ship.y, 8, 0, Math.PI * 2);" (six spaces). We'll replace with "      ctx.arc(player.x, player.y, 8, 0, Math.PI * 2);".
+
+Now publishState: lines 131-134.
+
+Line 131: "        x: ship ? ship.x : 0,". Actually with indent 8 spaces? Let's fetch portion lines 127-135:
+
+127:     window.__game = {
+128:       state: phase,
+129:       score: score,
+130:       player: {
+131:         x: ship ? ship.x : 0,
+132:         y: ship ? ship.y : 0,
+133:         visible: ship ? (ship.x >= 0 && ship.x < W && ship.y >= 0 && ship.y < H) : false,
+134:       },
+
+We'll replace each of these three lines.
+
+- Replace line 131 with "        x: player ? player.x : 0,".
+- Replace line 132 with "        y: player ? player.y : 0,".
+- Replace line 133 with "        visible: player ? (player.x >= 0 && player.x < W && player.y >= 0 && player.y < H) : false,".
+
+Now we need to add split flag variable in STATE block after player variable. Our earlier change will add let split = false; after player declaration.
+
+But we need to ensure rest of code doesn't reference split yet; no issues.
+
+Now add lane constants and SAFE_RADIUS. We'll modify line 35.
+
+Line 35: "  const W = 800, H = 600;". We replace with multiple lines:
+
+"  const W = 800, H = 600;\n  const LANE_LEFT = W / 3;\n  const LANE_RIGHT = (2 * W) / 3;\n  const SAFE_RADIUS = 80;"
+
+Note we need correct indentation (2 spaces before const). The current line includes two spaces before const (line starts with two spaces as part of script: "  const W..."). So new string should preserve those spaces.
+
+Now need to ensure we don't exceed any "oldString not found" errors.
+
+We need to run each edit sequentially.
+
+One caution: after editing, line numbers will shift; but our old strings refer to original content.
+
+Since we are editing in multiple steps, need to adjust if subsequent edit's oldString is changed by earlier edit. Since we are editing different parts of file, order matters only if modifications affect the old strings.
+
+We need to order edits that don't interfere: first edit config line, then player variable line, then reset assignment (line 55) referencing ship, then render if line, then render arc line, then publishState lines.
+
+But reset function line uses "ship =" which will be still present until we edit. So it's fine.
+
+Now we must ensure that we also update references that we might have missed: In render comment (line 92) "Draw ship placeholder". Not needed but okay.
+
+Now we need to use edit tool appropriately.
+
+Let's proceed.
+
+
+
+---
+
+We need to implement Task 2: "Game state initialization — declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top."
+
+We have current code. There's a configuration section (CONFIG) with const W and H. We need to add lane constants and SAFE_RADIUS there, as we did. But also need to declare player object, obstacles array, score, phase, split flag, etc at script top (the STATE section). Already we have let ship; let bullets; let obstacles; let score; let highScore = 0; let phase; let keys; + other. But we need to rename "ship" to "player"? Or declare a new player object? The spec: "declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top."
+
+Let's examine the pattern from reference: In the reference, they had ship; bullets; asteroids; score; highScore; phase; fireCooldown; keys; etc.
+
+For our game we currently have a ship variable as placeholder. Since the new game will have a dot (player) that can be split or not, we need a "player" object instead of ship. Maybe rename using "player" variable. Also need split flag (likely boolean indicating if currently split). Also obstacles array already present. Also lane constants and SAFE_RADIUS added.
+
+The instruction: "declare player object, obstacles array, score, phase, split flag, lane constants and SAFE_RADIUS at script top." It's okay to rename to player. However rename may impact other code. We have render and publishState referencing ship. That's placeholder draw. The task may only ask for declarations; maybe they will fill in later. We need to adjust code accordingly to reflect new variable names.
+
+But need to not break existing code. They might update later but we can provide placeholder variables for new ones, while preserving the placeholder code for ship. However we could add a player variable separately; but there is already ship variable which we can keep, but they want a player object.
+
+Let's read CONVENTIONS.md and TASKS.md for more directions to understand variable names expected in later tasks.
+
+Probably the design expects a player object similar to ship. Let's open these files.{"filePath":"/tmp/slop-factory-work/split-path-2-5d4f1830/CONVENTIONS.md","offset":1,"limit":2000}
+
+---
+
