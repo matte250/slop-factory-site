@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Time Reverse</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Time Reverse</h1>
+    <p class="game-description">The dot automatically moves forward; clicking or tapping rewinds its position a short distance, letting you dodge newly spawned obstacles with a brief cooldown.</p>
+    <ul class="game-controls">
+      <li>Tap or click to reverse</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const PLAYER_SPEED = 200; // px/sec forward
+    const REVERSE_DISTANCE = 80; // px backward when reversed
+    const REVERSE_COOLDOWN = 0.5; // seconds
+    const HAZARD_SPEED = 150; // px/sec leftward
+    const SPAWN_INTERVAL = 1.0; // seconds between hazards
+    const HAZARD_SIZE = 20; // square side length
+    const PLAYER_RADIUS = 5;
+    const SAFE_RADIUS = 150; // unused placeholder
+
+    // === STATE ==============================================================
+    // Define initial game state objects.
+    let player = { x: 400, y: 300 };
+    let hazards = []; // array of hazard objects {x,y,w,h}
+    let score = { value: 0 };
+    let phase = { state: "menu" }; // possible values: "menu", "playing", "gameover"
+    let reverseCooldown = 0;
+    let spawnTimer = 0;
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // === RESET =============================================================
+    function reset() {
+      player = { x: 400, y: 300 };
+      hazards = [];
+      score.value = 0;
+      phase.state = "playing";
+      reverseCooldown = 0;
+      spawnTimer = 0;
+      lastTime = performance.now();
+    }
+
+    // === INPUT =============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") {
+        reset();
+        return;
+      }
+    });
+    const restartBtn = document.getElementById("restart");
+    restartBtn.addEventListener("click", reset);
+    function tryReverse() {
+      if (phase.state !== "playing") return;
+      if (reverseCooldown <= 0) {
+        player.x = Math.max(0, player.x - REVERSE_DISTANCE);
+        reverseCooldown = REVERSE_COOLDOWN;
+      }
+    }
+    canvas.addEventListener("click", tryReverse);
+    document.addEventListener("keydown", (ev) => {
+      if (ev.code === "Space") {
+        tryReverse();
+      }
+    });
+
+    // === UPDATE =============================================================
+    function update(dt) {
+      if (phase.state !== "playing") return;
+      // Move player forward
+      player.x += PLAYER_SPEED * dt;
+      // Clamp player to canvas bounds
+      player.x = Math.min(Math.max(player.x, 0), canvas.width);
+      // Cooldown timer
+      if (reverseCooldown > 0) reverseCooldown -= dt;
+      // Hazard spawn timer
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        const y = Math.random() * (canvas.height - HAZARD_SIZE);
+        hazards.push({ x: canvas.width, y, w: HAZARD_SIZE, h: HAZARD_SIZE });
+        spawnTimer = SPAWN_INTERVAL;
+      }
+      // Update hazards
+      for (let i = hazards.length - 1; i >= 0; i--) {
+        const h = hazards[i];
+        h.x -= HAZARD_SPEED * dt;
+        // Collision detection (circle-rectangle)
+        const dx = Math.abs(player.x - (h.x + h.w / 2));
+        const dy = Math.abs(player.y - (h.y + h.h / 2));
+        if (dx < PLAYER_RADIUS + h.w / 2 && dy < PLAYER_RADIUS + h.h / 2) {
+          phase.state = "gameover";
+        }
+        // Remove off-screen hazards and increase score
+        if (h.x + h.w < 0) {
+          hazards.splice(i, 1);
+          score.value += 1;
+        }
+      }
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      // Clear background
+      ctx.fillStyle = "#0f1320";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Draw hazards
+      ctx.fillStyle = "#7df9ff";
+      for (const h of hazards) {
+        ctx.fillRect(h.x, h.y, h.w, h.h);
+      }
+      // Draw player
+      ctx.fillStyle = "#ff52ae";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      // HUD
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score.value}`, 12, 22);
+      // Game over overlay
+      if (phase.state === "gameover") {
+        ctx.fillStyle = "rgba(10,10,15,0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#ff52ae";
+        ctx.textAlign = "center";
+        ctx.font = "44px ui-sans-serif, system-ui";
+        ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillStyle = "#e6e6f0";
+        ctx.font = "20px ui-sans-serif, system-ui";
+        ctx.fillText(`Final score ${score.value}`, canvas.width / 2, canvas.height / 2 + 14);
+        ctx.font = "16px ui-sans-serif, system-ui";
+        ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+      }
+    }
+
+    // === LOOP =============================================================
+    // Time tracking.
+    let lastTime = performance.now();
+    let loopId = null;
+
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      const visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+      window.__game = {
+        state: phase.state,
+        score: score.value,
+        player: { x: player.x, y: player.y, visible },
+        objective: "Dodge obstacles by rewinding the dot's position."
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+    startLoop();
+    
+  </script>
+</body>
+</html>
