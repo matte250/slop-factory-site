@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Tunnel Breath</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 20px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Tunnel Breath</h1>
+    <p class="game-description">Tap to momentarily expand the tunnel walls outward, widening the safe corridor and pushing obstacles aside; the expansion quickly contracts, so timing the breath against dense clusters is essential.</p>
+    <ul class="game-controls">
+      <li>Tap or click to expand the tunnel</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const PLAYER_SPEED = 200; // px/sec forward (downwards)
+    const PLAYER_H_SPEED = 250; // horizontal speed from input
+    const HAZARD_SPEED = 150; // px/sec hazards moving downwards
+    const HAZARD_RADIUS = 12;
+    const SAFE_RADIUS = 200; // no spawn within this radius of player at spawn
+    const SPAWN_INTERVAL = 1.5; // seconds between hazard spawns
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    let player = { x: 400, y: 300, radius: 10 };
+    let hazards = []; // array of hazard objects {x, y, radius}
+    let score = 0;
+    let phase = "menu"; // "menu" | "playing" | "won" | "lost"
+    let keys = new Set();
+    let lastTime = performance.now();
+    let loopId = null;
+    let audioCtx = null;
+    let spawnTimer = 0;
+    let breathActive = false; // placeholder for expand action
+
+    // === RESET ==============================================================
+    function reset() {
+      phase = "playing";
+      score = 0;
+      hazards = [];
+      spawnTimer = 0;
+      player.x = 400;
+      player.y = 300;
+      breathActive = false;
+      publishState();
+    }
+
+    // === UPDATE =============================================================
+function update(dt) {
+  if (phase !== "playing") return;
+  // Player forward movement (downwards)
+  player.y += PLAYER_SPEED * dt;
+  if (player.y > canvas.height) player.y = canvas.height;
+
+  // Horizontal movement based on input
+  const dirX = (keys.has("ArrowRight") || keys.has("d") || keys.has("D") ? 1 : 0)
+             - (keys.has("ArrowLeft")  || keys.has("a") || keys.has("A") ? 1 : 0);
+  player.x += dirX * PLAYER_H_SPEED * dt;
+  player.x = clamp(player.x, player.radius, canvas.width - player.radius);
+
+  // Update hazards positions and check collisions
+  for (let i = hazards.length - 1; i >= 0; i--) {
+    const h = hazards[i];
+    h.y += HAZARD_SPEED * dt;
+    // Collision detection
+    const dx = h.x - player.x;
+    const dy = h.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < player.radius + h.radius) {
+      phase = "lost";
+      beep(110, 0.25);
+      break;
+    }
+    // Remove hazards that have moved off the bottom of the canvas
+    if (h.y - h.radius > canvas.height) {
+      hazards.splice(i, 1);
+      score += 10; // survived hazard
+    }
+  }
+
+  // Spawn hazards respecting SAFE_RADIUS
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnTimer = SPAWN_INTERVAL;
+    const x = Math.random() * canvas.width;
+    const y = -HAZARD_RADIUS;
+    const dx = x - player.x;
+    const dy = y - player.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > SAFE_RADIUS) {
+      hazards.push({ x, y, radius: HAZARD_RADIUS });
+    }
+  }
+
+  // Breath action scoring
+  if (breathActive) {
+    score += 5;
+    breathActive = false;
+  }
+}
+
+    // === LOOP / UPDATE ======================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error("loop error", err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === RENDER =============================================================
+    function render() {
+      // Clear canvas
+      ctx.fillStyle = "#0f1320";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw player
+      ctx.fillStyle = "#7df9ff";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw hazards
+      ctx.fillStyle = "#ff5252";
+      for (const h of hazards) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") {
+        reset();
+        return;
+      }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => {
+      keys.delete(ev.key);
+    });
+    document.getElementById("restart").addEventListener("click", reset);
+    // Tap or click expands tunnel (placeholder flag)
+    canvas.addEventListener("click", () => {
+      breathActive = true;
+    });
+
+    // === AUDIO (lazy) =======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "square";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch {}
+    }
+
+    // === HELPERS ============================================================
+    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score,
+        player: {
+          x: player.x,
+          y: player.y,
+          visible: player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height,
+        },
+        objective: "Tap to expand the tunnel and avoid obstacles.",
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+    startLoop();
+    publishState();
+  </script>
+</body>
+</html>
