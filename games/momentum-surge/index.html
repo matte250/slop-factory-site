@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Momentum Surge</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#e6e6f0; font-family:ui-sans-serif,system-ui,sans-serif; }
+    .game-header { padding:12px 16px; border-bottom:1px solid #1d1d2a; }
+    .game-header h1 { margin:0; font-size:18px; color:#7df9ff; }
+    .game-header .game-description { margin:4px 0; color:#a5a5b8; }
+    main { display:flex; flex-direction:column; align-items:center; padding:16px; }
+    canvas { background:#0f1320; border:1px solid #2a2f44; }
+    .game-restart { margin-top:10px; padding:8px 14px; background:#1c2030; color:#7df9ff; border:1px solid #2a2f44; cursor:pointer; }
+    .game-restart:hover { background:#232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Momentum Surge</h1>
+    <p class="game-description">The dot auto‑advances at a modest pace, and each tap charges a momentum meter; when full, the dot bursts forward in a short high‑speed surge that can smash through obstacles, then speed and momentum reset.</p>
+    <ul class="game-controls">
+      <li>Tap to charge momentum</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const PLAYER_R = 8;
+  const PLAYER_BASE_SPEED = 200; // px/sec
+  const PLAYER_SURGE_SPEED = 800; // px/sec during surge
+  const PLAYER_SURGE_DURATION = 0.4; // seconds
+  const PLAYER_V_SPEED = 300; // vertical movement speed
+  const MOMENTUM_MAX = 5;
+  const MOMENTUM_PER_TAP = 1;
+
+  const HAZARD_R = 12;
+  const HAZARD_SPAWN_MIN = 0.8;
+  const HAZARD_SPAWN_MAX = 2.0;
+  const SAFE_RADIUS = 200;
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const restartBtn = document.getElementById("restart");
+
+  let player;
+  let hazards;
+  let score;
+  let phase; // "playing" | "gameover"
+  let keys;
+  let spawnCooldown;
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+  let highScore = 0;
+
+  // === RESET ==============================================================
+  function reset() {
+    player = { x: 150, y: canvas.height / 2, radius: PLAYER_R, momentum: 0, surgeTimer: 0, speed: PLAYER_BASE_SPEED };
+    hazards = [];
+    score = 0;
+    phase = "playing";
+    keys = new Set();
+    spawnCooldown = 1;
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP ==============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error("loop error", err);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE ==============================================================
+  function update(dt) {
+    if (phase !== "playing") return;
+
+    // Spawn hazards
+    spawnCooldown -= dt;
+    if (spawnCooldown <= 0) {
+      spawnHazard();
+      spawnCooldown = HAZARD_SPAWN_MIN + Math.random() * (HAZARD_SPAWN_MAX - HAZARD_SPAWN_MIN);
+    }
+
+    // Player vertical movement
+    const dirY = (keys.has("ArrowDown") || keys.has("s") || keys.has("S") ? 1 : 0)
+               - (keys.has("ArrowUp")   || keys.has("w") || keys.has("W") ? 1 : 0);
+    player.y += dirY * PLAYER_V_SPEED * dt;
+    player.y = clamp(player.y, PLAYER_R, canvas.height - PLAYER_R);
+
+    // Surge timer handling
+    if (player.surgeTimer > 0) {
+      player.surgeTimer -= dt;
+      if (player.surgeTimer <= 0) {
+        player.speed = PLAYER_BASE_SPEED;
+        player.surgeTimer = 0;
+      }
+    }
+
+    // Move hazards leftward according to current speed
+    const currentSpeed = player.speed;
+    for (const h of hazards) {
+      h.x -= currentSpeed * dt;
+    }
+
+    // Remove off‑screen hazards
+    hazards = hazards.filter(h => h.x + HAZARD_R > 0);
+
+    // Collision detection
+    for (const h of hazards) {
+      if (!h.alive) continue;
+      if (circleCollide(player.x, player.y, PLAYER_R, h.x, h.y, HAZARD_R)) {
+        if (player.surgeTimer > 0) {
+          // Smash hazard
+          h.alive = false;
+          score += 10;
+          beep(880, 0.05);
+        } else {
+          // Game over
+          phase = "gameover";
+          if (score > highScore) highScore = score;
+          beep(110, 0.3);
+        }
+        break;
+      }
+    }
+    // Cleanup dead hazards
+    hazards = hazards.filter(h => h.alive);
+  }
+
+  // === RENDER ==============================================================
+  function render() {
+    // Clear background
+    ctx.fillStyle = "#0f1320";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Hazards
+    ctx.fillStyle = "#ff8c52";
+    for (const h of hazards) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, HAZARD_R, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Player
+    ctx.fillStyle = "#7df9ff";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_R, 0, Math.PI * 2);
+    ctx.fill();
+
+    // HUD: Score
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "16px ui-sans-serif,system-ui,sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score ${score}`, 12, 22);
+    ctx.textAlign = "right";
+    ctx.fillText(`Best ${highScore}`, canvas.width - 12, 22);
+
+    // Momentum meter
+    const meterW = 120;
+    const meterH = 10;
+    const meterX = canvas.width / 2 - meterW / 2;
+    const meterY = 12;
+    ctx.strokeStyle = "#7df9ff";
+    ctx.strokeRect(meterX, meterY, meterW, meterH);
+    ctx.fillStyle = "#7df9ff";
+    const fillW = (player.momentum / MOMENTUM_MAX) * meterW;
+    ctx.fillRect(meterX, meterY, fillW, meterH);
+
+    // Game‑over overlay
+    if (phase === "gameover") {
+      ctx.fillStyle = "rgba(10,10,15,0.7)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#ff52ae";
+      ctx.textAlign = "center";
+      ctx.font = "44px ui-sans-serif,system-ui,sans-serif";
+      ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+      ctx.font = "20px ui-sans-serif,system-ui,sans-serif";
+      ctx.fillText(`Final score ${score}`, canvas.width / 2, canvas.height / 2 + 14);
+      ctx.font = "16px ui-sans-serif,system-ui,sans-serif";
+      ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+    }
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "r" || ev.key === "R") { reset(); return; }
+    if (ev.code === "Space") {
+      chargeMomentum();
+    } else {
+      keys.add(ev.key);
+    }
+  });
+  document.addEventListener("keyup", (ev) => {
+    if (ev.code === "Space") return;
+    keys.delete(ev.key);
+  });
+  restartBtn.addEventListener("click", reset);
+  canvas.addEventListener("mousedown", (ev) => {
+    // Any click/tap charges momentum
+    chargeMomentum();
+  });
+
+  // === AUDIO (lazy) ======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    const visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+    window.__game = {
+      state: phase === "playing" ? "playing" : "gameover",
+      score,
+      player: { x: player.x, y: player.y, visible },
+      objective: "Charge momentum and surge to break obstacles."
+    };
+  }
+
+  // === HELPERS ============================================================
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function circleCollide(x1, y1, r1, x2, y2, r2) {
+    const dx = x1 - x2;
+    const dy = y1 - y2;
+    const dist2 = dx * dx + dy * dy;
+    const rad = r1 + r2;
+    return dist2 <= rad * rad;
+  }
+  function spawnHazard() {
+    // Spawn off‑screen to the right, avoid immediate collision
+    const x = canvas.width + HAZARD_R + Math.random() * 100;
+    let y;
+    do {
+      y = HAZARD_R + Math.random() * (canvas.height - 2 * HAZARD_R);
+    } while (Math.hypot(x - player.x, y - player.y) < SAFE_RADIUS);
+    hazards.push({ x, y, alive: true });
+  }
+  function chargeMomentum() {
+    if (phase !== "playing") return;
+    player.momentum = Math.min(MOMENTUM_MAX, player.momentum + MOMENTUM_PER_TAP);
+    beep(440, 0.05);
+    if (player.momentum >= MOMENTUM_MAX) {
+      player.surgeTimer = PLAYER_SURGE_DURATION;
+      player.speed = PLAYER_SURGE_SPEED;
+      player.momentum = 0;
+      beep(660, 0.1);
+    }
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
