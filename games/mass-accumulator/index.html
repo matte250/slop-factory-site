@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mass Accumulator</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Mass Accumulator</h1>
+    <p class="game-description">Collect glowing mass orbs as you move forward. Tap to release a radial shockwave that pushes obstacles away and grants a brief speed boost. Manage your stored mass to survive and achieve high scores.</p>
+    <ul class="game-controls">
+      <li>Arrow keys or WASD to steer</li>
+      <li>Space to release shockwave</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG ==============================================================
+    const W = 800, H = 600;
+    const PLAYER_RADIUS = 8;
+    const PLAYER_THRUST = 200; // px/sec^2
+    const PLAYER_FRICTION = 0.9; // per second decay factor
+    const PLAYER_TURN_SPEED = Math.PI * 1.5; // rad/sec
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const keys = new Set();
+    let loopId = null;
+    let audioCtx = null;
+    let lastTime = performance.now();
+
+    let player = { x: W/2, y: H/2, vx: 0, vy: 0, alive: true };
+    let hazards = []; // array of hazard objects
+    let score = 0;
+    let highScore = 0;
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+
+    // === RESET ==============================================================
+    function reset() {
+      player.x = W/2; player.y = H/2; player.vx = 0; player.vy = 0; player.alive = true;
+      hazards = [];
+      score = 0;
+      phase = "playing";
+      lastTime = performance.now();
+      publishState();
+      startLoop();
+    }
+
+    // === LOOP ==============================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (e) {
+          console.error('loop error', e);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    // === UPDATE ==============================================================
+    function update(dt) {
+      if (phase !== "playing") return;
+      // Simple forward movement
+      player.vx = 80; // constant forward speed
+      // Steering left/right
+      const steer = (keys.has('ArrowRight')||keys.has('d')||keys.has('D') ? 1 : 0) -
+                    (keys.has('ArrowLeft')||keys.has('a')||keys.has('A') ? 1 : 0);
+      player.vy = steer * PLAYER_THRUST;
+      // Apply velocity
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+      // Apply friction
+      player.vx *= Math.pow(PLAYER_FRICTION, dt);
+      player.vy *= Math.pow(PLAYER_FRICTION, dt);
+      // Clamp within canvas
+      if (player.x < 0) player.x = 0;
+      if (player.x > W) player.x = W;
+      if (player.y < 0) player.y = 0;
+      if (player.y > H) player.y = H;
+      // Score increments over time
+      score = Math.floor(score + dt);
+    }
+
+    // === RENDER ==============================================================
+    function render() {
+      ctx.fillStyle = '#05050c';
+      ctx.fillRect(0, 0, W, H);
+      // Player dot
+      ctx.fillStyle = '#7df9ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI*2);
+      ctx.fill();
+      // HUD
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText('Score ' + score, 12, 22);
+      // Game over overlay
+      if (phase === "gameover") {
+        ctx.fillStyle = 'rgba(5,5,12,0.65)';
+        ctx.fillRect(0,0,W,H);
+        ctx.fillStyle = '#ff52ae';
+        ctx.textAlign = 'center';
+        ctx.font = '44px ui-sans-serif, system-ui';
+        ctx.fillText('Game Over', W/2, H/2 - 20);
+        ctx.fillStyle = '#e6e6f0';
+        ctx.font = '20px ui-sans-serif, system-ui';
+        ctx.fillText('Final score ' + score, W/2, H/2 + 14);
+        ctx.fillStyle = '#a5a5b8';
+        ctx.font = '16px ui-sans-serif, system-ui';
+        ctx.fillText('Press R or click Restart', W/2, H/2 + 42);
+      }
+    }
+
+    // === INPUT ==============================================================
+    document.addEventListener('keydown', ev => {
+      if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+      keys.add(ev.key);
+      if (ev.key === ' ') ev.preventDefault();
+    });
+    document.addEventListener('keyup', ev => { keys.delete(ev.key); });
+    document.getElementById('restart').addEventListener('click', reset);
+
+    // === AUDIO (lazy) ===========================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + durSec);
+      } catch(e) {}
+    }
+
+    // === OBSERVABLE CONTRACT ================================================
+    function publishState() {
+      window.__game = {
+        state: phase,
+        score: score,
+        player: {
+          x: player.x,
+          y: player.y,
+          visible: player.x >= 0 && player.x <= W && player.y >= 0 && player.y <= H
+        },
+        objective: "Collect glowing mass orbs while moving forward, release shockwave to clear obstacles and boost speed."
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+  </script>
+</body>
+</html>
