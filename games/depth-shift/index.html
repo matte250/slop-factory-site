@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Depth Shift</title>
+  <style>
+    body { margin:0; background:#0a0a0f; color:#e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding:12px 16px; border-bottom:1px solid #1d1d2a; }
+    .game-header h1 { margin:0; font-size:18px; color:#7df9ff; }
+    .game-header .game-description { margin:4px 0; color:#a5a5b8; }
+    .game-header .game-controls { margin:4px 0; padding-left:18px; color:#c8c8d8; }
+    main { display:flex; flex-direction:column; align-items:center; padding:16px; }
+    canvas { background:#0f1320; border:1px solid #2a2f44; }
+    .game-restart { margin-top:10px; padding:8px 14px; background:#1c2030; color:#7df9ff; border:1px solid #2a2f44; cursor:pointer; }
+    .game-restart:hover { background:#232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Depth Shift</h1>
+    <p class="game-description">Navigate a glowing dot through a neon tunnel, flipping layers to dodge obstacles. Timing is key.</p>
+    <ul class="game-controls">
+      <li>Tap or click to flip layers</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+// (constants can be added later)
+
+// === STATE ==============================================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const restartBtn = document.getElementById("restart");
+
+// Player object
+let player = {
+  x: canvas.width / 2,
+  y: canvas.height - 60,
+  r: 6,
+  layer: 0,   // 0 = near, 1 = far
+  vx: 0,
+};
+
+let hazards = []; // array of hazard objects
+let score = 0;
+let phase = "playing"; // "menu" | "playing" | "gameover"
+let keys = new Set();
+let lastTime = performance.now();
+let loopId = null;
+let audioCtx = null;
+
+// === RESET ==============================================================
+function reset() {
+  player.x = canvas.width / 2;
+  player.y = canvas.height - 60;
+  player.layer = 0;
+  hazards = [];
+  score = 0;
+  phase = "playing";
+  keys.clear();
+  lastTime = performance.now();
+  publishState();
+  startLoop();
+}
+
+// === LOOP ==============================================================
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+      publishState();
+    } catch (err) {
+      console.error("loop error", err);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+
+// === UPDATE ==============================================================
+function update(dt) {
+  if (phase !== "playing") return;
+
+  // Player movement (horizontal)
+  const dirX = (keys.has("ArrowRight") || keys.has("d") || keys.has("D") ? 1 : 0)
+            - (keys.has("ArrowLeft") || keys.has("a") || keys.has("A") ? 1 : 0);
+  const PLAYER_SPEED = 300; // px/sec
+  player.x += dirX * PLAYER_SPEED * dt;
+  // Clamp to canvas bounds
+  player.x = Math.max(player.r, Math.min(canvas.width - player.r, player.x));
+
+  // Hazard motion
+  updateHazards(dt);
+}
+
+// Move hazards each frame, remove off‑screen ones
+function updateHazards(dt) {
+  for (let i = hazards.length - 1; i >= 0; i--) {
+    const h = hazards[i];
+    // Assume vertical motion toward player (downward)
+    if (h.vy !== undefined) {
+      h.y += h.vy * dt;
+    } else if (h.vx !== undefined) {
+      // fallback if velocity defined as vx
+      h.x += h.vx * dt;
+    }
+    // Remove if completely out of view
+    if (h.y > canvas.height || h.x > canvas.width || h.x + h.w < 0) {
+      hazards.splice(i, 1);
+    }
+  }
+}
+
+// === RENDER ==============================================================
+function render() {
+  // Background gradient
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  bgGrad.addColorStop(0, "#0a0a0f");
+  bgGrad.addColorStop(1, "#001f3f");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw hazards
+  ctx.fillStyle = "#ff52ae";
+  for (const h of hazards) {
+    ctx.fillRect(h.x, h.y, h.w, h.h);
+  }
+
+  // Draw player (glowing dot)
+  ctx.fillStyle = "#7df9ff";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Draw HUD (score)
+  ctx.fillStyle = "#e6e6f0";
+  ctx.font = "16px ui-sans-serif, system-ui";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score ${score}`, 12, 22);
+}
+
+// === INPUT ==============================================================
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "r" || ev.key === "R") {
+    reset();
+    return;
+  }
+  keys.add(ev.key);
+});
+document.addEventListener("keyup", (ev) => {
+  keys.delete(ev.key);
+});
+restartBtn.addEventListener("click", reset);
+
+// === AUDIO (lazy) =======================================================
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch {}
+}
+
+// === OBSERVABLE CONTRACT ================================================
+function publishState() {
+  window.__game = {
+    state: phase === "playing" ? "playing" : "gameover",
+    score,
+    player: {
+      x: player.x,
+      y: player.y,
+      visible: player.x >= 0 && player.x <= canvas.width,
+    },
+    objective: "Flip between layers to dodge obstacles.",
+  };
+}
+
+// === BOOT ================================================================
+reset();
+  </script>
+</body>
+</html>
