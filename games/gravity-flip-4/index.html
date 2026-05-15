@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Gravity Flip</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Gravity Flip</h1>
+    <p class="game-description">A dot automatically moves forward while gravity pulls it toward the floor; each tap flips gravity, causing the dot to fall to the ceiling, letting you dodge floor or ceiling obstacles with a short cooldown.</p>
+    <ul class="game-controls">
+      <li>Press Space to flip gravity</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG =============================================================
+    const GRAVITY = 800; // px/sec^2, pull direction (positive = down)
+    const PLAYER_SPEED = 200; // forward speed px/sec
+
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+
+    let player = { x: 50, y: canvas.height - 20, vy: 0, onFloor: true };
+    let hazards = []; // will hold obstacle objects
+    let score = 0;
+    let phase = "menu"; // "menu" | "playing" | "gameover"
+    let keys = new Set();
+    let lastTime = performance.now();
+    let loopId = null;
+    let audioCtx = null;
+
+    // === INPUT ==============================================================
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'r' || ev.key === 'R') {
+        reset();
+        return;
+      }
+      keys.add(ev.key);
+    });
+    document.addEventListener('keyup', (ev) => {
+      keys.delete(ev.key);
+    });
+    restartBtn.addEventListener('click', reset);
+
+    // === RESET ==============================================================
+    function reset() {
+      // Reset game state
+      player = { x: 50, y: canvas.height - 20, vy: 0, onFloor: true };
+      hazards = [];
+      score = 0;
+      phase = "playing";
+      keys.clear();
+    }
+
+    // === LOOP ==============================================================
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+          publishState();
+        } catch (err) {
+          console.error('loop error', err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+
+    function update(dt) {
+      // Update cooldown
+      if (flipCooldown > 0) flipCooldown -= dt;
+      // Gravity flip
+      if ((keys.has(' ') || keys.has('Space')) && flipCooldown <= 0) {
+        gravityDir *= -1;
+        flipCooldown = 0.2;
+        beep(440, 0.1);
+      }
+      // Apply gravity
+      player.vy += gravityDir * GRAVITY * dt;
+      player.y += player.vy * dt;
+      // Floor / ceiling collision
+      const radius = 5;
+      if (player.y > canvas.height - radius) {
+        player.y = canvas.height - radius;
+        player.vy = 0;
+        player.onFloor = true;
+      } else if (player.y < radius) {
+        player.y = radius;
+        player.vy = 0;
+        player.onFloor = false;
+      }
+      // Horizontal movement
+      player.x += PLAYER_SPEED * dt;
+      if (player.x > canvas.width + radius) player.x = -radius;
+      // Score increment
+      score += Math.round(dt * 10);
+    }
+
+    // === RENDER ==============================================================
+    function render() {
+      // Clear background
+      ctx.fillStyle = '#0f1320';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Draw player
+      ctx.fillStyle = '#ff00ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      // HUD
+      ctx.fillStyle = '#e6e6f0';
+      ctx.font = '16px ui-sans-serif, system-ui';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Score ${score}`, 12, 22);
+    }
+
+    // === AUDIO (lazy) ======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch (e) {}
+    }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      const visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+      window.__game = {
+        state: phase,
+        score,
+        player: {
+          x: player.x,
+          y: player.y,
+          visible,
+        },
+        objective: 'Flip gravity to dodge obstacles and survive as long as possible.',
+      };
+    }
+
+    // === BOOT ===============================================================
+    // Initialize gravity direction and cooldown
+    let gravityDir = 1;
+    let flipCooldown = 0;
+    reset();
+    startLoop();
+  </script>
+</body>
+</html>
