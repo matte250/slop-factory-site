@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Swap Obstacles</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; margin: 0 auto; background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { display: block; margin: 10px auto; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+    <header class="game-header">
+      <h1>Swap Obstacles</h1>
+      <p class="game-description">The dot auto‑advances; each tap swaps the order of the next two incoming obstacles, letting you rearrange gaps to fit the dot’s path, with a short cooldown between swaps.</p>
+      <ul class="game-controls">
+        <li>Tap / Click to swap the next two obstacles</li>
+        <li>Press R or click Restart</li>
+      </ul>
+    </header>
+    <main>
+      <canvas id="game" width="800" height="600"></canvas>
+  <button id="restart" class="game-restart" type="button">Restart</button>
+  <script>
+    // === CONFIG =============================================================
+    // Constants for game physics and mechanics
+    const PLAYER_R = 10; // radius of the player dot
+    const PLAYER_SPEED = 300; // pixels per second
+    const OBSTACLE_W = 60;
+    const OBSTACLE_H = 20;
+    const SAFE_RADIUS = 30; // distance considered safe before an obstacle
+    const SWAP_COOLDOWN = 0.5; // seconds
+    const OBSTACLE_SPEED = 200; // px/s
+    const SPAWN_INTERVAL_MIN = 1; // seconds
+    const SPAWN_INTERVAL_MAX = 3; // seconds
+    
+    // === STATE ==============================================================
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const restartBtn = document.getElementById("restart");
+    
+    let player = { x: canvas.width / 2, y: canvas.height - 50 };
+    let obstacles = [];
+    let score = 0;
+    let phase = "ready"; // "ready" | "playing" | "gameover"
+    let lastSwapTime = 0;
+    let keys = new Set();
+    let audioCtx = null;
+    let spawnTimer = 0;
+    
+    // === LOOP =============================================================
+    let lastTime = performance.now();
+    let loopId = null;
+    
+    function startLoop() {
+      if (loopId !== null) cancelAnimationFrame(loopId);
+      function tick(now) {
+        try {
+          const dt = Math.min((now - lastTime) / 1000, 0.1);
+          lastTime = now;
+          update(dt);
+          render();
+        } catch (err) {
+          console.error('loop error', err);
+        }
+        loopId = requestAnimationFrame(tick);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    
+    function update(dt) {
+      // Return early if not playing
+      if (phase !== "playing") return;
+
+      // ----- Player movement -----
+      const speed = PLAYER_SPEED;
+      const dirX = (keys.has("ArrowRight") || keys.has("d") || keys.has("D") ? 1 : 0)
+                 - (keys.has("ArrowLeft")  || keys.has("a") || keys.has("A") ? 1 : 0);
+      player.x += dirX * speed * dt;
+      // Clamp within canvas bounds
+      player.x = clamp(player.x, PLAYER_R, canvas.width - PLAYER_R);
+
+      // ----- Obstacles motion -----
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.y += OBSTACLE_SPEED * dt;
+        // Check for collision with player (circle‑rect)
+        if (
+          player.x + PLAYER_R > obs.x &&
+          player.x - PLAYER_R < obs.x + OBSTACLE_W &&
+          player.y + PLAYER_R > obs.y &&
+          player.y - PLAYER_R < obs.y + OBSTACLE_H
+        ) {
+          // Collision – game over
+          phase = "gameover";
+          beep(220, 0.3);
+          return;
+        }
+        // Remove obstacle if it passed the bottom and count score
+        if (obs.y > canvas.height) {
+          obstacles.splice(i, 1);
+          score++;
+          beep(440, 0.05);
+        }
+      }
+
+      // ----- Obstacle spawning -----
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        // Simple spawn respecting SAFE_RADIUS horizontally from player
+        let x;
+        let attempts = 0;
+        do {
+          x = Math.random() * (canvas.width - OBSTACLE_W);
+          attempts++;
+        } while (Math.abs(x + OBSTACLE_W / 2 - player.x) < SAFE_RADIUS && attempts < 10);
+        obstacles.push({ x, y: -OBSTACLE_H });
+        spawnTimer = SPAWN_INTERVAL_MIN + Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
+      }
+    }
+    
+    function render() {
+      // Background
+      ctx.fillStyle = "#0f1320";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // Obstacles
+      ctx.fillStyle = "#7df9ff";
+      for (const obs of obstacles) {
+        ctx.fillRect(obs.x, obs.y, OBSTACLE_W, OBSTACLE_H);
+      }
+      // Player
+      ctx.fillStyle = "#ff00aa";
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, PLAYER_R, 0, Math.PI * 2);
+      ctx.fill();
+      // HUD – draw score
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.textAlign = "left";
+      ctx.fillText(`Score ${score}`, 12, 22);
+    }
+    
+    // === HELPERS =========================================================
+    function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+    // === RESET =============================================================
+    function reset() {
+      // Initialize game state
+      player = { x: canvas.width / 2, y: canvas.height - 50 };
+      obstacles = [];
+      score = 0;
+      phase = "playing";
+      spawnTimer = SPAWN_INTERVAL_MIN + Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
+      lastSwapTime = 0;
+      // Ensure keys cleared
+      keys.clear();
+      // Publish initial state
+      publishState();
+      // Start the main loop
+      startLoop();
+    }
+
+    // === INPUT =============================================================
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "r" || ev.key === "R") { reset(); return; }
+      keys.add(ev.key);
+    });
+    document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+    restartBtn.addEventListener("click", reset);
+
+    // === AUDIO (lazy) ======================================================
+    function beep(freq, durSec) {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "square";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durSec);
+      } catch (e) { }
+    }
+
+    // === OBSERVABLE CONTRACT ===============================================
+    function publishState() {
+      const visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+      const stateMap = { "ready": "menu", "playing": "playing", "gameover": "gameover" };
+      window.__game = {
+        state: stateMap[phase] || "menu",
+        score,
+        player: { x: player.x, y: player.y, visible },
+        objective: "Swap obstacles to create a safe path for the moving dot.",
+      };
+    }
+
+    // === BOOT ===============================================================
+    reset();
+  </script>
+</body>
+</html>
