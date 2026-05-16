@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Elastic Size</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #05050c; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Elastic Size</h1>
+    <p class="game-description">The dot auto‑advances; holding or tapping smoothly expands or contracts its radius, letting you slip through tight gaps or push small obstacles away, with a limited rate of change instead of a binary toggle.</p>
+    <ul class="game-controls">
+      <li>Hold or tap to expand/contract</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const W = 800, H = 600;
+  const PLAYER_START_X = 100;
+  const PLAYER_START_Y = H / 2;
+  const PLAYER_SPEED = 120; // px/sec auto-advance
+  const PLAYER_RADIUS_MIN = 12;
+  const PLAYER_RADIUS_MAX = 30;
+  const PLAYER_RADIUS_RATE = 60; // px/sec radius change
+  const HAZARD_SPEED = 200; // px/sec leftward
+  const HAZARD_R_MIN = 8;
+  const HAZARD_R_MAX = 14;
+  const SAFE_RADIUS = 120; // no spawn near player at start
+  const SPAWN_INTERVAL = 1.0; // seconds
+  const SCORE_INCREMENT = 1;
+
+  // === STATE =============================================================
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const restartBtn = document.getElementById("restart");
+
+  let player; // {x,y,radius,alive}
+  let hazards; // array of {x,y,radius,vx}
+  let score;
+  let highScore = 0;
+  let phase; // "playing" | "gameover"
+  let keys;
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+  let spawnTimer = 0;
+
+  // === RESET =============================================================
+  function reset() {
+    player = {
+      x: PLAYER_START_X,
+      y: PLAYER_START_Y,
+      radius: PLAYER_RADIUS_MIN,
+      alive: true,
+    };
+    hazards = [];
+    score = 0;
+    phase = "playing";
+    keys = new Set();
+    spawnTimer = 0;
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP =============================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        update(dt);
+        render();
+        publishState();
+      } catch (err) {
+        console.error("loop error", err);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  // === UPDATE =============================================================
+  function update(dt) {
+    if (phase !== "playing") return;
+
+    // Player auto‑move
+    player.x = wrap(player.x + PLAYER_SPEED * dt, W);
+
+    // Expand / contract radius
+    const expanding = keys.has(' ') || keys.has('Space');
+    if (expanding) {
+      player.radius = Math.min(PLAYER_RADIUS_MAX, player.radius + PLAYER_RADIUS_RATE * dt);
+    } else {
+      player.radius = Math.max(PLAYER_RADIUS_MIN, player.radius - PLAYER_RADIUS_RATE * dt);
+    }
+
+    // Hazards movement and removal
+    for (const h of hazards) {
+      h.x += h.vx * dt;
+    }
+    hazards = hazards.filter((h) => h.x + h.radius > 0);
+
+    // Collision detection
+    for (let i = hazards.length - 1; i >= 0; i--) {
+      const h = hazards[i];
+      const dist = Math.hypot(player.x - h.x, player.y - h.y);
+      if (dist < player.radius + h.radius) {
+        // If player is expanded enough, destroy hazard; else game over.
+        if (player.radius > h.radius + 4) {
+          hazards.splice(i, 1);
+          score += SCORE_INCREMENT;
+          beep(660, 0.07);
+        } else {
+          player.alive = false;
+          phase = "gameover";
+          if (score > highScore) highScore = score;
+          beep(220, 0.3);
+        }
+        break;
+      }
+    }
+
+    // Spawn new hazards
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnHazard();
+      spawnTimer = SPAWN_INTERVAL;
+    }
+  }
+
+  function spawnHazard() {
+    const radius = HAZARD_R_MIN + Math.random() * (HAZARD_R_MAX - HAZARD_R_MIN);
+    let x = W + radius + 10;
+    let y = Math.random() * (H - radius * 2) + radius;
+    // Ensure safe distance from player at spawn
+    const safeDist = Math.hypot(x - player.x, y - player.y);
+    if (safeDist < SAFE_RADIUS) {
+      // shift vertically to keep safe
+      y = (y + SAFE_RADIUS) % H;
+    }
+    hazards.push({ x, y, radius, vx: -HAZARD_SPEED });
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    // Clear background
+    ctx.fillStyle = "#05050c";
+    ctx.fillRect(0, 0, W, H);
+
+    // Hazards
+    ctx.fillStyle = "#ff5733"; // orange-red
+    for (const h of hazards) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Player
+    if (player.alive) {
+      ctx.strokeStyle = "#7df9ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // HUD – score
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "16px ui-sans-serif, system-ui";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score ${score}`, 12, 22);
+    ctx.textAlign = "right";
+    ctx.fillText(`Best ${highScore}`, W - 12, 22);
+
+    // Game over overlay
+    if (phase === "gameover") {
+      ctx.fillStyle = "rgba(5,5,12,0.65)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#ff52ae";
+      ctx.textAlign = "center";
+      ctx.font = "44px ui-sans-serif, system-ui";
+      ctx.fillText("Game Over", W / 2, H / 2 - 20);
+      ctx.fillStyle = "#e6e6f0";
+      ctx.font = "20px ui-sans-serif, system-ui";
+      ctx.fillText(`Final score ${score}`, W / 2, H / 2 + 14);
+      ctx.fillStyle = "#a5a5b8";
+      ctx.font = "16px ui-sans-serif, system-ui";
+      ctx.fillText("Press R or click Restart", W / 2, H / 2 + 42);
+    }
+  }
+
+  // === INPUT =============================================================
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "r" || ev.key === "R") { reset(); return; }
+    keys.add(ev.key);
+    if (ev.key === " ") ev.preventDefault();
+  });
+  document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+  restartBtn.addEventListener("click", reset);
+
+  // === AUDIO (lazy) ======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch (e) {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: phase,
+      score,
+      player: {
+        x: player.x,
+        y: player.y,
+        visible: player.x >= 0 && player.x < W && player.y >= 0 && player.y < H,
+      },
+      objective: "Expand or contract the dot to avoid or clear obstacles while moving forward.",
+    };
+  }
+
+  // === HELPERS ============================================================
+  function wrap(v, max) {
+    if (v < 0) return v + max;
+    if (v >= max) return v - max;
+    return v;
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
