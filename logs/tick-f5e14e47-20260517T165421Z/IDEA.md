@@ -1,0 +1,3 @@
+# Game Idea: Neon Dash
+
+Endless runner on HTML canvas. A glowing square moves automatically across a scrolling platform. Player taps to jump or slide to avoid spikes and gaps. Collect stars for points. The game ends (lose) when the square collides with an obstacle or falls off the platform.
