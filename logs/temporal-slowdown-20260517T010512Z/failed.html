@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Temporal Slowdown</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Temporal Slowdown</h1>
+    <p class="game-description">The dot auto‑advances; tap to briefly slow the tunnel, letting you thread tighter gaps.</p>
+    <ul class="game-controls">
+      <li>Space to activate slowdown</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+  // === CONFIG =============================================================
+  const DOT_SPEED = 300; // px/sec constant speed
+  const DOT_RADIUS = 8;
+  const SAFE_RADIUS = 200; // pixels, safe area around player start
+  const SLOWDOWN_DURATION = 1.5; // seconds, duration of slowdown effect
+  const SLOWDOWN_FACTOR = 0.3; // slowdown factor for obstacles during slowdown
+  const HAZARD_RADIUS = 8; // radius of hazard circles
+  const HAZARD_SPEED = 250; // px/sec obstacle speed
+  const MIN_SPAWN_INTERVAL = 1.0; // seconds
+  const MAX_SPAWN_INTERVAL = 2.0; // seconds
+
+  // === STATE ==============================================================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const restartBtn = document.getElementById('restart');
+
+  let player; // { x, y }
+  let hazards = []; // array of hazard objects
+  let score = 0;
+  let phase = 'playing'; // "playing" | "gameover"
+  let keys; // Set of pressed keys
+  let lastTime;
+  let loopId = null;
+  let audioCtx = null;
+  let spawnTimer = 0; // seconds until next hazard spawn
+  let dot; // player dot
+  let slowdownTimer = 0; // seconds remaining for slowdown effect
+
+  // === RESET ==============================================================
+  function reset() {
+    dot = { x: 0, y: canvas.height / 2 };
+    keys = new Set();
+    lastTime = performance.now();
+    publishState();
+    startLoop();
+  }
+
+  // === LOOP / UPDATE ======================================================
+  function startLoop() {
+    if (loopId !== null) cancelAnimationFrame(loopId);
+    function tick(now) {
+      try {
+        const dt = Math.min((now - lastTime) / 1000, 0.1);
+        lastTime = now;
+        // Clear canvas each tick
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        update(dt);
+        render();
+        publishState();
+      } catch (e) {
+        console.error('loop error', e);
+      }
+      loopId = requestAnimationFrame(tick);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+
+  function update(dt) {
+    // Apply slowdown timer decrement
+    if (slowdownTimer > 0) {
+      slowdownTimer = Math.max(0, slowdownTimer - dt);
+    }
+    // Simple constant forward motion for dot
+    dot.x += DOT_SPEED * dt;
+    if (dot.x - DOT_RADIUS > canvas.width) dot.x = DOT_RADIUS;
+    // Hazard movement
+    const speedFactor = slowdownTimer > 0 ? SLOWDOWN_FACTOR : 1;
+    for (let i = hazards.length - 1; i >= 0; i--) {
+      const h = hazards[i];
+      h.x -= HAZARD_SPEED * speedFactor * dt;
+      // Remove off-screen hazards
+      if (h.x + HAZARD_RADIUS < 0) {
+        hazards.splice(i, 1);
+      }
+    }
+  }
+
+  // === RENDER =============================================================
+  function render() {
+    ctx.fillStyle = '#0f1320';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ff52ae';
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, DOT_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // === INPUT ==============================================================
+  document.addEventListener('keydown', ev => {
+    if (ev.key === 'r' || ev.key === 'R') { reset(); return; }
+    keys.add(ev.key);
+    // placeholder: space triggers beep (slowdown effect placeholder)
+    if (ev.key === ' ') beep(440, 0.1);
+  });
+  document.addEventListener('keyup', ev => { keys.delete(ev.key); });
+  restartBtn.addEventListener('click', reset);
+
+  // === AUDIO (lazy) =======================================================
+  function beep(freq, durSec) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durSec);
+    } catch {}
+  }
+
+  // === OBSERVABLE CONTRACT ===============================================
+  function publishState() {
+    window.__game = {
+      state: 'playing',
+      score: 0,
+      player: {
+        x: Math.round(dot.x),
+        y: Math.round(dot.y),
+        visible: dot.x + DOT_RADIUS >= 0 && dot.x - DOT_RADIUS <= canvas.width && dot.y + DOT_RADIUS >= 0 && dot.y - DOT_RADIUS <= canvas.height,
+      },
+      objective: 'Tap to briefly slowdown the tunnel and thread tight gaps.',
+    };
+  }
+
+  // === BOOT ===============================================================
+  reset();
+  </script>
+</body>
+</html>
