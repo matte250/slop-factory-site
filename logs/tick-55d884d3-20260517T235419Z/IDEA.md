@@ -1,0 +1,3 @@
+# Game Idea: Meteor Dodge
+
+A top‑down HTML canvas game where the player controls a small ship that can move left and right along the bottom of the screen and shoot upward. Meteors spawn at random positions at the top and fall with varying speeds. The player must destroy incoming meteors before they reach the bottom. **Lose condition:** the game ends when a meteor collides with the ship or when the player fails to destroy a meteor within a short time window, causing the ship to be crushed.
