@@ -1,0 +1,21 @@
+# Game Idea: Asteroid Dodge
+
+**Genre:** Arcade / Endless runner
+
+**Core Gameplay:**
+- Player controls a small spaceship that can move horizontally along the bottom of the canvas.
+- Asteroids of different sizes and speeds fall from the top.
+- Use arrow keys (or tap) to dodge.
+
+**Lose Condition:**
+- Collision between the ship and any asteroid ends the game.
+
+**Objective:**
+- Survive as long as possible and achieve the highest survival time/score.
+
+**Why Canvas?**
+- Simple 2‑D rendering of moving shapes.
+- Fast collision detection using bounding boxes.
+
+**Potential Extensions (optional):**
+- Power‑ups, increasing difficulty, visual effects.
