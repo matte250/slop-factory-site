@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pulse Freeze</title>
+  <style></style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Pulse Freeze</h1>
+    <p class="game-description">Tap to generate a short‑lived temporal field around the dot that pauses all on‑screen obstacles for a brief moment, letting you slip through dense clusters; the field then cools down before it can be used again.</p>
+    <ul class="game-controls">
+      <li>Arrow keys (or WASD) to move</li>
+      <li>Tap or click to activate field</li>
+      <li>Press R or click Restart</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+// === CONFIG =============================================================
+// Config constants
+const FIELD_RADIUS = 80; // radius of temporal field, px
+const FIELD_DURATION = 0.5; // seconds
+const FIELD_COOLDOWN = 3.0; // seconds
+
+// Player physics constants
+const PLAYER_ACCEL = 300; // px/sec^2
+const PLAYER_MAX_SPEED = 400; // px/sec
+const PLAYER_FRICTION = 0.85; // per second friction factor
+
+// Hazard constants
+const HAZARD_SPEED = 120; // px/sec
+const HAZARD_SIZE = 20; // size of square hazard, px
+
+// === STATE ==============================================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const restartBtn = document.getElementById("restart");
+
+let player = { x: canvas.width / 2, y: canvas.height / 2, vx: 0, vy: 0, radius: 8 };
+let hazards = []; // array of hazard objects
+let score = 0;
+let highScore = 0;
+let phase = "menu"; // "menu" | "playing" | "gameover"
+let keys = new Set();
+let lastTime = performance.now();
+let loopId = null;
+let audioCtx = null;
+// === LOOP ==============================================================
+function startLoop() {
+  if (loopId !== null) cancelAnimationFrame(loopId);
+  function tick(now) {
+    try {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      update(dt);
+      render();
+    } catch (err) {
+      console.error("loop error", err);
+    }
+    loopId = requestAnimationFrame(tick);
+  }
+  loopId = requestAnimationFrame(tick);
+}
+// === RESET ==============================================================
+function reset() {
+  player = { x: canvas.width / 2, y: canvas.height / 2, vx: 0, vy: 0, radius: 8 };
+  hazards = [];
+  score = 0;
+  phase = "playing";
+  keys.clear();
+  lastTime = performance.now();
+  fieldCooldown = 0;
+  fieldTimer = 0;
+  // spawn initial hazards
+  for (let i = 0; i < 5; i++) spawnHazard();
+  startLoop();
+}
+
+function spawnHazard() {
+  const SAFE_RADIUS = 120;
+  let x, y;
+  do {
+    x = Math.random() * canvas.width;
+    y = Math.random() * canvas.height;
+  } while (Math.hypot(x - player.x, y - player.y) < SAFE_RADIUS);
+  const angle = Math.random() * Math.PI * 2;
+  const speed = HAZARD_SPEED;
+  hazards.push({
+    x,
+    y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    size: HAZARD_SIZE,
+  });
+}
+
+// === UPDATE ==============================================================
+let fieldTimer = 0;
+let fieldCooldown = 0;
+function update(dt) {
+  if (phase !== "playing") return;
+  // Player input
+  let ax = 0, ay = 0;
+  if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) ax -= 1;
+  if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) ax += 1;
+  if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) ay -= 1;
+  if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) ay += 1;
+  if (ax !== 0 || ay !== 0) {
+    const len = Math.hypot(ax, ay);
+    ax = (ax / len) * PLAYER_ACCEL;
+    ay = (ay / len) * PLAYER_ACCEL;
+  }
+  player.vx += ax * dt;
+  player.vy += ay * dt;
+  // friction
+  player.vx *= Math.pow(PLAYER_FRICTION, dt);
+  player.vy *= Math.pow(PLAYER_FRICTION, dt);
+  // clamp speed
+  const sp = Math.hypot(player.vx, player.vy);
+  if (sp > PLAYER_MAX_SPEED) {
+    const s = PLAYER_MAX_SPEED / sp;
+    player.vx *= s;
+    player.vy *= s;
+  }
+  // move player with wraparound
+  player.x = (player.x + player.vx * dt + canvas.width) % canvas.width;
+  player.y = (player.y + player.vy * dt + canvas.height) % canvas.height;
+
+  // field timers
+  if (fieldCooldown > 0) fieldCooldown -= dt;
+  if (fieldTimer > 0) {
+    fieldTimer -= dt;
+    if (fieldTimer <= 0) {
+      // field ended
+    }
+  }
+
+  // hazards movement (paused while field active)
+  if (fieldTimer <= 0) {
+    for (const h of hazards) {
+      h.x = (h.x + h.vx * dt + canvas.width) % canvas.width;
+      h.y = (h.y + h.vy * dt + canvas.height) % canvas.height;
+    }
+  }
+
+  // collision detection when field not active
+  if (fieldTimer <= 0) {
+    for (const h of hazards) {
+      const dx = h.x - player.x;
+      const dy = h.y - player.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < h.size / 2 + player.radius) {
+        phase = "gameover";
+        if (score > highScore) highScore = score;
+        beep(110, 0.3);
+        break;
+      }
+    }
+  }
+
+  // simple scoring: increment each frame
+  score = Math.floor((performance.now() - lastTime) / 1000);
+}
+
+// === RENDER ==============================================================
+function render() {
+  // background
+  ctx.fillStyle = "#05050c";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // field effect
+  if (fieldTimer > 0) {
+    ctx.fillStyle = "rgba(255,255,255,0.2)";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, FIELD_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // hazards
+  ctx.fillStyle = "#ff5200";
+  for (const h of hazards) {
+    ctx.fillRect(h.x - h.size/2, h.y - h.size/2, h.size, h.size);
+  }
+  // player
+  ctx.fillStyle = "#7df9ff";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // HUD
+  ctx.fillStyle = "#e6e6f0";
+  ctx.font = "16px ui-sans-serif, system-ui";
+  ctx.textAlign = "left";
+  ctx.fillText(`Score ${score}`, 12, 22);
+  if (phase === "gameover") {
+    ctx.fillStyle = "rgba(0,0,0,0.6)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff52ae";
+    ctx.textAlign = "center";
+    ctx.font = "44px ui-sans-serif, system-ui";
+    ctx.fillText("Game Over", canvas.width/2, canvas.height/2 - 20);
+    ctx.fillStyle = "#e6e6f0";
+    ctx.font = "20px ui-sans-serif, system-ui";
+    ctx.fillText(`Final score ${score}`, canvas.width/2, canvas.height/2 + 14);
+    ctx.fillStyle = "#a5a5b8";
+    ctx.font = "16px ui-sans-serif, system-ui";
+    ctx.fillText("Press R or click Restart", canvas.width/2, canvas.height/2 + 42);
+  }
+}
+
+// === INPUT ==============================================================
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "r" || ev.key === "R") {
+    reset();
+    return;
+  }
+  keys.add(ev.key);
+  if (ev.key === " " || ev.key === "Space") ev.preventDefault();
+});
+
+document.addEventListener("keyup", (ev) => { keys.delete(ev.key); });
+restartBtn.addEventListener("click", reset);
+canvas.addEventListener("mousedown", (ev) => {
+  if (fieldCooldown <= 0 && phase === "playing") {
+    fieldTimer = FIELD_DURATION;
+    fieldCooldown = FIELD_COOLDOWN;
+    beep(440, 0.1);
+  }
+});
+
+// === AUDIO (lazy) ======================================================
+function beep(freq, durSec) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "triangle";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + durSec);
+  } catch {}
+}
+
+// === OBSERVABLE CONTRACT ===============================================
+function publishState() {
+  window.__game = {
+    state: phase,
+    score,
+    player: {
+      x: player.x,
+      y: player.y,
+      visible: player.x >= 0 && player.x < canvas.width && player.y >= 0 && player.y < canvas.height,
+    },
+    objective: "Tap to generate a short‑lived temporal field that pauses obstacles, letting you slip through dense clusters.",
+  };
+}
+
+// === BOOT ===============================================================
+reset();
+</script>
+</body>
+</html>
