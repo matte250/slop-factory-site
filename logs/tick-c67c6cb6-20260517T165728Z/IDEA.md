@@ -1,0 +1,5 @@
+# Game Idea: Asteroid Dodge
+
+- Player pilots a small ship on a scrolling HTML canvas, dodging randomly generated asteroids.
+- Controls: left/right arrows (or mouse clicks) to steer.
+- Lose condition: colliding with an asteroid ends the game.
