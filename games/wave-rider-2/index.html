@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Wave Rider</title>
+  <style>
+    body { margin: 0; background: #0a0a0f; color: #e6e6f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .game-header { padding: 12px 16px; border-bottom: 1px solid #1d1d2a; }
+    .game-header h1 { margin: 0; font-size: 18px; color: #7df9ff; }
+    .game-header .game-description { margin: 4px 0; color: #a5a5b8; }
+    .game-header .game-controls { margin: 4px 0; padding-left: 18px; color: #c8c8d8; }
+    main { display: flex; flex-direction: column; align-items: center; padding: 16px; }
+    canvas { background: #0f1320; border: 1px solid #2a2f44; }
+    .game-restart { margin-top: 10px; padding: 8px 14px; background: #1c2030; color: #7df9ff; border: 1px solid #2a2f44; cursor: pointer; }
+    .game-restart:hover { background: #232842; }
+  </style>
+</head>
+<body>
+  <header class="game-header">
+    <h1>Wave Rider</h1>
+    <p class="game-description">Guide the dot along a sinusoidal path, tapping to raise its amplitude and avoid obstacles.</p>
+    <ul class="game-controls">
+      <li>Press Space to raise or lower amplitude</li>
+      <li>Press R or click Restart</li>
+      <li>Use arrow keys to move (if applicable)</li>
+    </ul>
+  </header>
+  <main>
+    <canvas id="game" width="800" height="600"></canvas>
+    <button id="restart" class="game-restart" type="button">Restart</button>
+  </main>
+  <script>
+    // === CONFIG ==============================================================
+// Game constants
+const PLAYER_SPEED = 150; // px/sec
+const WAVE_FREQ = 0.02; // rad per px
+const AMPLITUDE_HIGH = 80;
+const PLAYER_RADIUS = 8;
+const HAZARD_SPEED = 200; // px/sec
+const HAZARD_SPAWN_INTERVAL = 1.5; // seconds
+const HAZARD_RADIUS = 12;
+const SAFE_RADIUS = 200;
+
+// === STATE ==============================================================
+// Game state objects
+let player = { x: 400, y: 300, amplitude: 0 };
+let hazards = [];
+let score = 0;
+let phase = "menu"; // "menu" | "playing" | "gameover"
+
+// Additional common variables (will be used later)
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let keys = new Set();
+let lastTime = performance.now();
+let loopId = null;
+
+ // Placeholder for future functions
+ // === RESET ==============================================================
+ function reset() {
+   // reset game state
+   player = { x: 0, y: canvas.height / 2, amplitude: 0 };
+   travel = 0;
+   hazards = [];
+   score = 0;
+   phase = "playing";
+   keys.clear();
+   spawnTimer = HAZARD_SPAWN_INTERVAL;
+   lastTime = performance.now();
+   publishState();
+   startLoop();
+ }
+
+ // === LOOP ==============================================================
+ function startLoop() {
+   if (loopId !== null) cancelAnimationFrame(loopId);
+   function tick(now) {
+     try {
+       const dt = Math.min((now - lastTime) / 1000, 0.1);
+       lastTime = now;
+       update(dt);
+       render();
+       publishState();
+     } catch (err) {
+       console.error("loop error", err);
+     }
+     loopId = requestAnimationFrame(tick);
+   }
+   loopId = requestAnimationFrame(tick);
+ }
+
+ // === UPDATE ==============================================================
+ let travel = 0; // distance traveled, used for wave phase
+ let spawnTimer = HAZARD_SPAWN_INTERVAL;
+
+ function update(dt) {
+   if (phase !== "playing") return;
+
+   // Player forward travel
+   travel += PLAYER_SPEED * dt;
+
+   // Update player position
+   player.x = canvas.width * 0.2;
+   player.y = canvas.height / 2 + player.amplitude * Math.sin(WAVE_FREQ * travel);
+
+   // Hazard spawning
+   spawnTimer -= dt;
+   if (spawnTimer <= 0) {
+     spawnHazard();
+     spawnTimer = HAZARD_SPAWN_INTERVAL;
+   }
+
+   // Move hazards
+   for (let i = hazards.length - 1; i >= 0; i--) {
+     const h = hazards[i];
+     h.x -= HAZARD_SPEED * dt;
+
+     // Collision detection
+     const dx = h.x - player.x;
+     const dy = h.y - player.y;
+     const dist = Math.hypot(dx, dy);
+     if (dist < HAZARD_RADIUS + PLAYER_RADIUS) {
+       phase = "gameover";
+       beep(110, 0.25);
+       break;
+     }
+
+     // Off-screen removal and scoring
+     if (h.x < -HAZARD_RADIUS) {
+       hazards.splice(i, 1);
+       score += 10;
+       beep(880, 0.05);
+     }
+   }
+ }
+
+ // Hazard spawning helper
+ function spawnHazard() {
+   const safeX = canvas.width + HAZARD_RADIUS;
+   const safeY = Math.random() * (canvas.height - 2 * HAZARD_RADIUS) + HAZARD_RADIUS;
+   const dx = safeX - player.x;
+   const dy = safeY - player.y;
+   const dist = Math.hypot(dx, dy);
+   if (dist < SAFE_RADIUS) {
+     spawnHazard();
+     return;
+   }
+   hazards.push({ x: safeX, y: safeY });
+ }
+
+ // === RENDER ==============================================================
+ function render() {
+   // Clear canvas
+   ctx.fillStyle = "#0f1320";
+   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+   // Draw hazards
+   ctx.fillStyle = "#ff5252";
+   for (const h of hazards) {
+     ctx.beginPath();
+     ctx.arc(h.x, h.y, HAZARD_RADIUS, 0, Math.PI * 2);
+     ctx.fill();
+   }
+
+   // Draw player
+   ctx.fillStyle = "#7df9ff";
+   ctx.beginPath();
+   ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+   ctx.fill();
+
+   // HUD
+   ctx.fillStyle = "#e6e6f0";
+   ctx.font = "16px ui-sans-serif, system-ui";
+   ctx.textAlign = "left";
+   ctx.fillText(`Score ${score}`, 12, 22);
+
+   // Game over overlay
+   if (phase === "gameover") {
+     ctx.fillStyle = "rgba(10,10,15,0.7)";
+     ctx.fillRect(0, 0, canvas.width, canvas.height);
+     ctx.textAlign = "center";
+     ctx.font = "44px ui-sans-serif, system-ui";
+     ctx.fillStyle = "#ff5252";
+     ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2 - 20);
+     ctx.font = "20px ui-sans-serif, system-ui";
+     ctx.fillStyle = "#e6e6f0";
+     ctx.fillText(`Final score ${score}`, canvas.width / 2, canvas.height / 2 + 14);
+     ctx.font = "16px ui-sans-serif, system-ui";
+     ctx.fillStyle = "#c8c8d8";
+     ctx.fillText("Press R or click Restart", canvas.width / 2, canvas.height / 2 + 42);
+   }
+ }
+
+ // === INPUT ==============================================================
+ document.addEventListener("keydown", (ev) => {
+   if (ev.key === "r" || ev.key === "R") {
+     reset();
+     return;
+   }
+   if (ev.code === "Space") {
+     player.amplitude = player.amplitude === 0 ? AMPLITUDE_HIGH : 0;
+   }
+   keys.add(ev.key);
+ });
+ document.addEventListener("keyup", (ev) => {
+   keys.delete(ev.key);
+ });
+ document.getElementById("restart").addEventListener("click", reset);
+
+ // === AUDIO (lazy) ======================================================
+ let audioCtx = null;
+ function beep(freq, durSec) {
+   try {
+     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+     const osc = audioCtx.createOscillator();
+     const gain = audioCtx.createGain();
+     osc.type = "square";
+     osc.frequency.value = freq;
+     gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durSec);
+     osc.connect(gain);
+     gain.connect(audioCtx.destination);
+     osc.start();
+     osc.stop(audioCtx.currentTime + durSec);
+   } catch (e) {
+     // ignore audio errors
+   }
+ }
+
+ // === OBSERVABLE CONTRACT ================================================
+ function publishState() {
+   const visible = player.x >= 0 && player.x <= canvas.width && player.y >= 0 && player.y <= canvas.height;
+   window.__game = {
+     state: phase === "playing" ? "playing" : phase === "gameover" ? "gameover" : "menu",
+     score,
+     player: {
+       x: player.x,
+       y: player.y,
+       visible,
+     },
+     objective: "Guide the dot along a sinusoidal path, tap to raise amplitude and avoid obstacles.",
+   };
+ }
+
+ // === BOOT ==============================================================
+ reset();
+  </script>
+</body>
+</html>
