@@ -1,0 +1,3 @@
+# Game Idea: Cosmic Courier
+
+A top‑down HTML canvas game where the player pilots a small delivery ship navigating an endless stream of moving asteroids and space debris. The ship can thrust in four directions and uses a limited boost to dash past clusters. Collect floating packages for points while avoiding collisions. **Lose condition:** the ship crashes into an asteroid or runs out of fuel, ending the run.
