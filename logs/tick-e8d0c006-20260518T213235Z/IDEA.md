@@ -1,0 +1,3 @@
+# Orbit Defender
+
+A minimalist HTML Canvas game where the player controls a spaceship orbiting a central planet. Asteroids continuously approach the planet; the player must rotate the ship and shoot them down. Each asteroid that reaches the planet reduces its health. The game ends (loss) when the planet's health reaches zero. Points are earned for each destroyed asteroid, encouraging quick reflexes and strategic positioning.
