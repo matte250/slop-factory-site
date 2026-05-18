@@ -1,0 +1,9 @@
+# Game Idea: Asteroid Dodge
+
+**Concept**: A simple 2‑D arcade game where the player controls a spaceship that can move horizontally across the bottom of the canvas. Asteroids fall from the top at varying speeds. The player must dodge them.
+
+**Controls**: Arrow keys or mouse/touch drag left‑right.
+
+**Lose Condition**: The game ends when the spaceship collides with any asteroid or when an asteroid reaches the bottom edge of the canvas.
+
+**Replay Loop**: After losing, the player can restart to try for a higher score.
