@@ -1,0 +1,7 @@
+# Random HTML Canvas Game Idea
+
+**Title:** Asteroid Dodge
+
+**Concept:** The player controls a small ship that can move horizontally along the bottom of the canvas. Asteroids fall from the top at increasing speed. The player must dodge them by moving left or right.
+
+**Lose Condition:** The game ends when an asteroid collides with the ship or reaches the bottom of the screen.
