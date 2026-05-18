@@ -1,0 +1,3 @@
+**Astro Dodge**
+
+A minimalist HTML canvas game where the player pilots a ship that must dodge incoming asteroids. The ship moves with arrow keys; asteroids appear from the right and travel left, speeding up over time. Power‑ups occasionally grant a temporary shield. **Lose condition:** collision with an asteroid or a countdown timer reaching zero. The goal is to survive as long as possible and achieve a high score.
