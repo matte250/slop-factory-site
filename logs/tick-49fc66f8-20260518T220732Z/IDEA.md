@@ -1,0 +1,3 @@
+# Orbital Dodge
+
+Control a ship that orbits a planet. Asteroids appear from the canvas edges and travel toward the planet. Move the ship clockwise or counter‑clockwise to dodge them. The game ends when an asteroid collides with the ship. Score is time survived.
