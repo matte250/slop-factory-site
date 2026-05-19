@@ -1,0 +1,3 @@
+# Game Idea: Pixel Runner
+
+A minimalist endless runner on an HTML canvas where a pixel character auto‑runs and can jump to dodge obstacles. The game ends when the player collides with an obstacle.
