@@ -1,0 +1,3 @@
+# Game Idea: **Orbit Avoider**
+
+A minimalist HTML canvas game where the player pilots a small spaceship orbiting a planet. The ship automatically revolves around the planet, and the player can thrust radially inward or outward to collect floating power‑ups while avoiding incoming asteroids. The lose condition triggers when the ship collides with an asteroid or drifts off the screen (leaves the orbit). Simple controls, physics‑based movement, and a score based on collected items make it easy to implement with canvas drawing and basic vector math.
