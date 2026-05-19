@@ -1,0 +1,3 @@
+# Game Idea: Asteroid Dodge
+
+Control a spaceship with arrow keys, navigating an endless stream of moving asteroids on an HTML canvas. Collect fuel cells to extend play time. **Lose condition:** colliding with any asteroid or running out of fuel.
