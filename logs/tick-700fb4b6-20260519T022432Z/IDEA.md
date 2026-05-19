@@ -1,0 +1,6 @@
+# Game Idea: Space Junk Collector
+
+- Side‑scrolling canvas where the player pilots a magnetic ship.
+- Collect floating debris to earn points.
+- Collide with asteroids → lose 1 shield; shield 0 = game over.
+- Reach a target score to win the level.
