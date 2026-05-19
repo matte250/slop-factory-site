@@ -1,0 +1,3 @@
+# Space Junk Defender
+
+Control a spaceship at the bottom of an HTML canvas. Meteors (space junk) fall from the top; click or drag to move the ship and fire a shield to block them. Each meteor that hits the ship reduces health, and after three hits the player loses. Earn points for each blocked meteor and try to survive as long as possible.
