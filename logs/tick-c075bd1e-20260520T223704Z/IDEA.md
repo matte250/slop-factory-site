@@ -1,0 +1,1 @@
+Space Debris Dodge: Control a ship navigating a starfield and dodge randomly falling debris. Use arrow keys to move. Debris accelerates over time; colliding with any piece ends the game. Power‑ups occasionally appear to grant temporary speed boost or clear nearby debris.
