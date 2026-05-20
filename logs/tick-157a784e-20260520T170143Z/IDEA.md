@@ -1,0 +1,8 @@
+# Game Idea: Asteroid Escape
+
+- **Genre:** Endless runner / arcade
+- **Core mechanic:** Player pilots a ship using arrow keys (or mouse) to dodge procedurally generated asteroids on an HTML canvas.
+- **Goal:** Survive as long as possible while collecting energy orbs to keep the ship powered.
+- **Lose condition:** Collision with an asteroid OR running out of energy.
+- **Visuals:** Simple geometric shapes (triangles for ship, circles for asteroids) with a parallax star background.
+- **Scoring:** Time survived + collected orbs.
