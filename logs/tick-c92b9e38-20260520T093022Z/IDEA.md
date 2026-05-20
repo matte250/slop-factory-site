@@ -1,0 +1,3 @@
+# Game Idea: Space Salvage
+
+Control a ship on an HTML canvas, collect floating cargo crates while dodging moving asteroids. Lose if you collide with an asteroid or run out of fuel.
