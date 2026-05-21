@@ -1,0 +1,6 @@
+# Game Idea: Meteor Dodge
+
+- **Genre:** Arcade action
+- **Core mechanic:** Player controls a ship with arrow keys, moving freely within the canvas. Meteors spawn from the top and fall at random speeds and angles.
+- **Goal:** Survive as long as possible, earning points over time.
+- **Lose condition:** The game ends immediately when the ship collides with any meteor.
