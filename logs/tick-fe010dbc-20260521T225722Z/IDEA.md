@@ -1,0 +1,2 @@
+# Canvas Runner
+A minimalist side‑scrolling runner where a pixelated character auto‑runs and the player clicks/taps to jump over randomly generated obstacles. The game ends (lose condition) when the character hits an obstacle or falls off the platform. All graphics are drawn on an HTML canvas using plain JavaScript.
