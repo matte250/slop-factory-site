@@ -1,0 +1,5 @@
+# Game Idea: Asteroid Shower
+
+Player controls a ship that moves horizontally at the bottom of an HTML canvas and shoots lasers upward. Randomly sized asteroids fall from the top. Each asteroid must be destroyed before it reaches the bottom edge.
+
+**Lose condition:** the game ends when any asteroid reaches the bottom of the canvas (or the ship is hit).
