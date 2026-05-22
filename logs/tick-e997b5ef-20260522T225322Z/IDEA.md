@@ -1,0 +1,3 @@
+# Game Idea: Meteor Escape
+
+Control a small ship with arrow keys on an HTML canvas. Meteors spawn from the top and fall faster over time. Survive as long as possible. **Lose condition:** the ship collides with a meteor or the timer reaches zero. Score equals survival time.
