@@ -1,0 +1,1 @@
+**Canvas Runner** – An endless runner where a player‑controlled square runs across a scrolling platform of simple rectangles. Press up to jump, down to slide under obstacles. The game ends when the square collides with an obstacle or falls off the platform. Simple shapes, parallax background, score based on distance.
