@@ -1,0 +1,7 @@
+## Game Idea: Neon Grid Escape
+
+A top‑down endless runner where the player controls a glowing orb navigating a procedurally generated neon grid. The orb automatically moves forward; the player taps or clicks to change direction (up/down/left/right) to dodge static and moving obstacles. The speed gradually increases.
+
+**Lose condition:** Colliding with any obstacle or moving off the visible grid ends the game.
+
+**Goal:** Survive as long as possible and achieve a high score based on distance traveled.
