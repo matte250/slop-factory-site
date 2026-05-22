@@ -1,0 +1,1 @@
+**Asteroid Dodge** – An endless HTML‑canvas arcade where the player moves a ship left/right to dodge falling asteroids. Asteroids spawn randomly from the top and fall at different speeds. The game ends when the ship collides with an asteroid; the score is how long you survive.
