@@ -1,0 +1,3 @@
+# Game Idea: Asteroid Escape
+
+Control a spaceship with arrow keys and navigate a scrolling field of randomly generated asteroids. Collect occasional power‑ups for temporary shields. **Lose condition:** The game ends instantly when the ship collides with any asteroid. Score is based on survival time.
