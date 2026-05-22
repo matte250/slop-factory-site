@@ -1,0 +1,1 @@
+Neon Escape: a top-down endless runner on an HTML canvas where a glowing dot continuously moves forward through a procedurally generated neon maze. The player rotates the dot to avoid moving barriers and spikes. Colliding with any obstacle or the canvas edge ends the game. Score is distance traveled.
