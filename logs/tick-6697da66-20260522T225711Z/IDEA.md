@@ -1,0 +1,3 @@
+# Game Idea: Neon Maze
+
+Control a small neon square that continuously moves forward through an infinite, procedurally‑generated maze of walls. Use arrow keys to rotate direction. The game ends when the square hits a wall (lose condition). Collect glowing orbs for score.
