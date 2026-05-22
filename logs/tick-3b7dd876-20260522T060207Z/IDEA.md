@@ -1,0 +1,3 @@
+# Game Idea
+
+**Nebula Escape** – an endless‑runner on an HTML canvas. The player pilots a spaceship that drifts through an asteroid field, moving up/down to dodge asteroids and collecting fuel cells to stay powered. The game ends when the ship collides with an asteroid or runs out of fuel.
