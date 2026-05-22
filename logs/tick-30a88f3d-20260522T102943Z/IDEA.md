@@ -1,0 +1,3 @@
+# Meteor Dodge
+
+Pilot a ship across an endless starfield, collect glowing orbs for points. Use arrow keys or WASD to move. Meteors spawn randomly; colliding with any meteor ends the game. Simple shapes rendered on an HTML canvas.
