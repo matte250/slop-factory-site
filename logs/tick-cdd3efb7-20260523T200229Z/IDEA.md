@@ -1,0 +1,7 @@
+# Game Idea: Cosmic Collector
+
+**Concept**: Play as a small spaceship navigating a scrolling starfield. Debris (gold, fuel, tools) falls from the top. Use the mouse or arrow keys to move the ship left/right and collect the debris for points.
+
+**Lose Condition**: The ship has three shields; colliding with an asteroid or letting a hazardous object hit the ship reduces a shield. Lose when all shields are depleted.
+
+**HTML Canvas Fit**: Simple sprite rendering, collision detection, and scrolling background—well‑suited for a single‑page canvas game.
