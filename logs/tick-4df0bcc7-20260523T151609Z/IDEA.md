@@ -1,0 +1,7 @@
+# Game Idea: **Canvas Meteor Dodge**
+
+- **Genre:** Endless arcade / Reflex
+- **Core mechanic:** Player controls a small spaceship with arrow keys (or mouse) and must dodge continuously spawning meteors that move across the canvas at increasing speed.
+- **Goal:** Survive as long as possible, earning points for each meteor avoided.
+- **Lose condition:** The game ends when a meteor collides with the player's ship.
+- **Visuals:** Simple 2‑D shapes (triangle ship, circles for meteors) rendered on an HTML `<canvas>` element.
