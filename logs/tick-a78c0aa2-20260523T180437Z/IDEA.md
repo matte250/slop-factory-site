@@ -1,0 +1,3 @@
+# Neon Runner
+
+A side‑scrolling HTML canvas game where a glowing dot moves forward automatically. The player taps or presses to make the dot jump over incoming rectangular obstacles. The score rises with survival time. **Lose condition:** colliding with any obstacle ends the game.
