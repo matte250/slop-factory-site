@@ -1,0 +1,7 @@
+# Asteroid Escape
+
+- Control a ship on an HTML canvas using arrow keys.
+- Asteroids fall from the top at increasing speed.
+- Collect floating energy orbs for points.
+- **Lose condition:** the ship collides with any asteroid.
+- Goal: survive as long as possible and achieve a high score.
