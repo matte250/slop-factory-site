@@ -1,0 +1,6 @@
+# Solar Flare Dodger
+
+- Control a spaceship at the bottom of the canvas with left/right arrow keys.
+- Asteroids fall from the top at increasing speed.
+- Collect power‑ups to boost shields or score.
+- **Lose condition:** collision with an asteroid or timer reaches zero.
