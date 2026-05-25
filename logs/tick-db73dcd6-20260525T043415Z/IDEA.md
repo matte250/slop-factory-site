@@ -1,0 +1,17 @@
+# Canvas Game Idea
+
+**Title:** "Asteroid Escape"
+
+**Concept:** The player controls a small ship that constantly moves upward on a scrolling starfield. Randomly spawning asteroids drift across the canvas. The player uses arrow keys (or mouse) to dodge them.
+
+**Goal:** Survive as long as possible while collecting glowing energy orbs that increase score.
+
+**Lose Condition:** The game ends when the ship collides with any asteroid (or after three collisions).
+
+**Key Features:**
+- Simple physics and collision detection using canvas.
+- Procedurally generated asteroid patterns.
+- Score counter and high‑score tracking.
+- Optional power‑ups (shields) to extend playtime.
+
+**Why Canvas?** All graphics are drawn with the HTML5 `<canvas>` API, making it lightweight and ideal for a quick, replayable arcade game.
