@@ -1,0 +1,3 @@
+# Space Junk Collector
+
+A simple HTML canvas game where the player controls a ship at the bottom and collects falling debris for points. Hazardous asteroids also fall; colliding with one or letting too much debris pile up at the bottom triggers game over.
