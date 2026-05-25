@@ -1,0 +1,3 @@
+# Asteroid Dodge
+
+A simple HTML‑canvas arcade game where the player controls a spaceship that moves left/right along the bottom of the screen. Asteroids fall from the top with increasing speed. The player must dodge the asteroids; the game ends (lose) when the ship collides with an asteroid or moves off the canvas.
