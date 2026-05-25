@@ -1,0 +1,6 @@
+# Game Idea: Lava Escape
+
+- Control a small avatar that moves horizontally at the bottom of the canvas.
+- Lava rises from the bottom, accelerating over time.
+- Collect floating air bubbles to extend your survival time.
+- **Lose condition:** touching the lava or running out of air ends the game.
