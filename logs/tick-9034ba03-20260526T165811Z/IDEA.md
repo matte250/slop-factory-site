@@ -1,0 +1,3 @@
+# Canvas Escape
+
+A minimalist endless runner on an HTML canvas where you control a square that slides forward through a procedurally generated tunnel of spikes and gaps. You can move left/right and jump. The speed increases over time. **Lose condition:** you collide with a spike or fall out of the tunnel.
