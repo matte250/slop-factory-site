@@ -1,0 +1,3 @@
+# Neon Asteroid Dodge
+
+An endless runner for HTML canvas: a neon‑styled spaceship moves horizontally across a scrolling starfield while randomly spawning asteroids descend. The player uses arrow keys (or mouse) to dodge; any collision ends the game. Score is measured by survival time.
