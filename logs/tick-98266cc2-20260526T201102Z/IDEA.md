@@ -1,0 +1,2 @@
+Pixel Dodger
+A simple HTML canvas game where you move a small square left/right at the bottom of the screen to avoid randomly falling blocks. Blocks accelerate as time passes. You lose when a block touches your square. Score is the survival time.
