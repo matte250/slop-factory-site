@@ -1,0 +1,3 @@
+# Asteroid Dodge
+
+A simple HTML canvas game where the player pilots a spaceship across a scrolling starfield, dodging randomly spawned asteroids. The ship can collect fuel canisters to extend play. **Lose condition:** Collision with an asteroid or running out of fuel ends the game.
