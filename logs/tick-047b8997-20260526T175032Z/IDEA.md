@@ -1,0 +1,3 @@
+# Game Idea: Orbit Escape
+
+Navigate a satellite around a planet on an HTML canvas. Use arrow keys to apply thrust and keep the orbit stable while dodging occasional meteor bursts. **Lose condition:** the satellite crashes into the planet or drifts off-screen.
