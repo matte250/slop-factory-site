@@ -1,0 +1,1 @@
+A mining drone navigates an endless scrolling asteroid field, collecting gems while avoiding collisions. Each hit reduces hull integrity; when hull reaches zero you lose.
