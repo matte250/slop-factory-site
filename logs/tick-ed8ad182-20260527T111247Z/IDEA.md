@@ -1,0 +1,3 @@
+# Game Idea: Asteroid Dodge
+
+A top‑down HTML canvas game where the player pilots a small ship that can move in all directions. Asteroids spawn from the edges and drift across the screen. The player must dodge them; colliding with any asteroid triggers a **lose condition** and ends the game. The goal is to survive as long as possible, with the score based on time survived.
