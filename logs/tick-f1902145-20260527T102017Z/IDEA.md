@@ -1,0 +1,3 @@
+# Game Idea
+
+**Glowball** – A minimalist HTML canvas game where the player controls a small glowing ball that moves left/right to dodge waves of geometric shapes falling from the top. The shapes accelerate over time, and a single collision ends the game. The score is the survival time in seconds.
