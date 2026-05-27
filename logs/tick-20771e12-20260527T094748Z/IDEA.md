@@ -1,0 +1,7 @@
+# Game Idea: Asteroid Dodge
+
+- **Genre:** Endless arcade runner
+- **Controls:** Tap / click to thrust upward; ship drifts downwards otherwise (gravity).
+- **Mechanics:** The ship moves forward automatically on an HTML canvas while randomly generated asteroids scroll from right to left.
+- **Goal:** Survive as long as possible, accumulating points for each asteroid dodged.
+- **Lose condition:** Collision with any asteroid or touching the bottom edge of the canvas.
