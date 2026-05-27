@@ -1,0 +1,3 @@
+# Pixel Dodger
+
+Control a square with arrow keys on an HTML canvas. Colored shapes fall from the top; collect green shapes for points and avoid red shapes. Lose when the player collides with a red shape or any shape reaches the bottom of the canvas.
