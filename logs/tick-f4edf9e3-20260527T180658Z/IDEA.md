@@ -1,0 +1,3 @@
+# Game Idea: Neon Grid Runner
+
+The player controls a small dot that moves automatically forward across an endless neon‑styled grid on an HTML canvas. Tapping or pressing left/right shifts the dot between lanes to dodge randomly generated spikes and moving walls. Collect glowing orbs for points. The game ends (lose condition) when the dot collides with any obstacle or falls into a gap. Simple controls, procedural generation, and clear lose condition make it quick to prototype on canvas.
