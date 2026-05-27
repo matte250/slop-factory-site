@@ -1,0 +1,7 @@
+# Game Idea: Space Junk Collector
+
+- **Genre:** Arcade / Endless runner
+- **Core mechanic:** Control a spaceship with arrow keys, collect floating space junk for points.
+- **Canvas elements:** Ship sprite, junk icons, moving asteroid obstacles.
+- **Lose condition:** Collision with an asteroid (or letting the timer reach zero).
+- **Goal:** Achieve the highest score before losing.
