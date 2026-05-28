@@ -1,0 +1,3 @@
+# Game Idea: Canvas Chaos
+
+A minimalist endless‑runner on an HTML canvas where the player controls a constantly moving square that must dodge procedurally generated obstacles (spikes, gaps, moving blocks). The player can jump or slide. **Lose condition:** collision with any obstacle or falling into a gap. The game tracks distance travelled and speeds up over time, encouraging high scores.
