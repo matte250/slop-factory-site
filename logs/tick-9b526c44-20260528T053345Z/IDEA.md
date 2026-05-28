@@ -1,0 +1,1 @@
+Space Miner: Pilot a ship that mines drifting asteroids for points. Use thrust and a mining laser. The ship has limited fuel and a hull that loses health on collisions. Lose when fuel runs out or hull reaches zero.
