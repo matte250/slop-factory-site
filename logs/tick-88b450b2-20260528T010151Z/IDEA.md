@@ -1,0 +1,1 @@
+Pixel Runner: An endless side‑scroll runner on HTML canvas. The player controls a pixel character that jumps over randomly generated obstacles and pits. The game ends when the character collides with an obstacle or falls into a pit.
