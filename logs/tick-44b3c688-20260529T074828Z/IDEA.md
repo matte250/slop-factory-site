@@ -1,0 +1,7 @@
+# Idea: Dodge the Falling Blocks
+
+- Control a small square with the left/right arrow keys.
+- Blocks of various sizes fall from the top at increasing speed.
+- Survive as long as possible.
+- **Lose condition:** any block collides with the player's square.
+- Simple graphics can be implemented entirely with the HTML canvas, no external assets required.
