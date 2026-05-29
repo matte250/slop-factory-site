@@ -1,0 +1,8 @@
+# Random Canvas Game Idea
+
+**Title:** Asteroid Salvage
+
+- Control a ship with arrow keys inside an HTML canvas.
+- Collect floating debris for points while avoiding moving asteroids.
+- Fuel drains over time; each debris collected restores a small amount of fuel.
+- **Lose condition:** Collision with an asteroid or fuel reaching zero ends the game.
