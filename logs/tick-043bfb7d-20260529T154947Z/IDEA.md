@@ -1,0 +1,8 @@
+# Game Idea: "Pixel Runner"
+
+- **Genre:** Endless side‑scroll runner.
+- **Core Loop:** A single‑pixel avatar automatically runs left‑to‑right on a procedurally generated platform. Tap/press to make it jump over gaps and obstacles.
+- **Lose Condition:** Collision with an obstacle or falling into a gap ends the game.
+- **Canvas Features:** Simple sprite drawing, scrolling background, collision detection, and basic physics.
+
+A minimal, fun game that can be built entirely with HTML5 Canvas and JavaScript.
