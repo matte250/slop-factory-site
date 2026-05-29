@@ -1,0 +1,5 @@
+# Game Idea: Asteroid Dodger
+
+**Concept**: A top‑down endless canvas game. The player pilots a spaceship moving upward, steering left/right to dodge randomly spawning asteroids that descend from the top. Asteroid speed and spawn rate increase over time.
+
+**Lose Condition**: The game ends when the ship collides with an asteroid.
