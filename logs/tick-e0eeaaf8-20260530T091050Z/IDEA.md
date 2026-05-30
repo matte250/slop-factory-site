@@ -1,0 +1,13 @@
+## Game Idea: Cosmic Reflections
+
+**Concept**: Players control a rotating mirror on an HTML canvas that reflects incoming laser beams to hit moving celestial targets. The mirror can be rotated with the mouse or arrow keys, and the laser continuously fires from the center.
+
+**Objective**: Keep reflecting the laser to hit targets before they escape the screen.
+
+**Lose Condition**: The game ends when a target reaches the edge of the canvas without being hit, or when the player fails to reflect the laser for more than 3 seconds, causing the laser to shut down.
+
+**Features**:
+- Simple physics for beam reflection.
+- Randomly spawning targets with varying speeds.
+- Score counter and increasing difficulty over time.
+- Minimalist space-themed visual style.
