@@ -1,0 +1,3 @@
+# Neon Escape
+
+Control a neon spaceship navigating through falling asteroids on an HTML canvas. Move left/right to dodge. The game ends when you collide with an asteroid. Score is based on survival time.
