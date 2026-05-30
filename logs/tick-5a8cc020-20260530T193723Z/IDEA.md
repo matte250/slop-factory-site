@@ -1,0 +1,6 @@
+# Game Idea: Block Escape
+
+- **Genre**: Endless side‑scroller.
+- **Core**: A square automatically runs forward. Tap or click to jump over gaps and spikes.
+- **Lose condition**: Hitting a spike or falling into a gap ends the game.
+- **Canvas fit**: Simple shapes and scrolling can be rendered with the HTML5 2D canvas API.
