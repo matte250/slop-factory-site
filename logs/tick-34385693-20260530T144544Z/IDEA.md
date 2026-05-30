@@ -1,0 +1,7 @@
+# Game Idea: Meteor Reflex
+
+- Control a ship that moves horizontally along the bottom of the canvas.
+- Meteors fall from the top at increasing speed.
+- Tap/press to fire upward shots; each shot destroys a meteor.
+- **Lose condition**: a meteor collides with the ship or reaches the bottom.
+- Score is the number of meteors destroyed.
