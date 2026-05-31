@@ -1,0 +1,3 @@
+# Asteroid Dodge
+
+A top‑down HTML canvas game where the player pilots a ship to dodge continuously spawning asteroids. Use arrow keys to move; any collision ends the game (lose condition). Score equals survival time.
