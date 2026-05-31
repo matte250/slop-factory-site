@@ -1,0 +1,2 @@
+# Game Idea: Canvas Asteroid Dodge
+A simple HTML‑canvas game where the player controls a triangular ship that moves left/right along the bottom. Asteroids fall from the top with increasing speed. The player must avoid collisions; the game ends (lose condition) when an asteroid hits the ship. Score is based on survival time.
