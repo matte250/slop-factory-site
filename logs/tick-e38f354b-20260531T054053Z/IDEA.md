@@ -1,0 +1,7 @@
+# Game Idea: Cosmic Dodger
+
+- Control a spaceship using arrow keys on an HTML canvas.
+- Asteroids spawn from random edges and drift across the screen.
+- Shoot or dodge asteroids to survive.
+- **Lose condition:** the ship collides with any asteroid.
+- Simple scoring based on the number of asteroids avoided.
