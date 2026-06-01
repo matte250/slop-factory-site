@@ -1,0 +1,7 @@
+# Game Idea: Cosmic Dodger
+
+**Concept**: Control a small spaceship moving across a star‑field canvas. Asteroids drift from right to left at increasing speed. Use arrow keys (or WASD) to steer and avoid collisions.
+
+**Lose Condition**: The game ends instantly when the spaceship collides with any asteroid.
+
+**Goal**: Survive as long as possible; the score is the elapsed time in seconds.
