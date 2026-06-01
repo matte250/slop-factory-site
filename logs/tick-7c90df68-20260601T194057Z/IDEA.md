@@ -1,0 +1,1 @@
+Endless Asteroid Dodger: The player pilots a ship on an HTML canvas, rotating and thrusting to avoid randomly spawning asteroids. Colliding with an asteroid or depleting fuel ends the game. Score = distance traveled.
