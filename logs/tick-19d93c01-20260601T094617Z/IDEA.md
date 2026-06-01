@@ -1,0 +1,3 @@
+# Game Idea: Neon Runner
+
+An endless runner where a neon hovercraft speeds through a scrolling cyber‑city. The player can **jump** or **slide** to dodge obstacles (walls, drones, gaps). **Lose condition:** colliding with any obstacle or falling off ends the game. Score is distance traveled. Canvas renders a parallax background, sprites, and simple particle effects. Power‑ups briefly invert controls or change gravity for added challenge.
