@@ -1,0 +1,3 @@
+# Game Idea: Neon Wave
+
+Control a tiny ship moving horizontally across the bottom of an HTML canvas. Waves of obstacles rise from the bottom in random patterns. **Lose condition:** The ship collides with an obstacle or falls off the bottom edge.
