@@ -1,0 +1,1 @@
+Stellar Dodge – Control a ship on an HTML canvas, dodge falling asteroids that speed up over time, and collect stars for points. Lose when the ship collides with any asteroid.
