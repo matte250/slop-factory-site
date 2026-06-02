@@ -1,0 +1,5 @@
+# Canvas Game Idea
+
+**Title:** Sky Runner
+
+Control a constantly running character on an HTML canvas. Tap or click to jump over gaps and obstacles while collecting stars. The game ends (lose condition) when the character collides with an obstacle or falls into a gap. Score is based on distance traveled and stars collected.
